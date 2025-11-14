@@ -152,6 +152,9 @@ async def send_telegram_notification(bot, symbol, name, current_price, last_pric
 # Telegram bot handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler pro /start příkaz."""
+    chat_id = update.effective_chat.id
+    print(f"📱 Příkaz /start od chat_id: {chat_id}")
+    
     await update.message.reply_text(
         "🚀 <b>Crypto Price Alert Bot</b>\n\n"
         "Použití:\n"
@@ -323,6 +326,9 @@ async def remove_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler pro /help příkaz."""
+    chat_id = update.effective_chat.id
+    print(f"📱 Příkaz /help od chat_id: {chat_id}")
+    
     await update.message.reply_text(
         "📖 <b>Nápověda</b>\n\n"
         "<b>Příkazy:</b>\n"
@@ -428,9 +434,14 @@ async def price_check_loop(application: Application):
 
 def main():
     """Hlavní funkce."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ Chyba: Nastavte proměnné prostředí TELEGRAM_BOT_TOKEN a TELEGRAM_CHAT_ID")
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ Chyba: Nastavte proměnnou prostředí TELEGRAM_BOT_TOKEN")
         return
+    
+    print("🔍 Debug - Kontrola environment variables:")
+    print(f"   TELEGRAM_BOT_TOKEN: {'✅ Nastaveno' if TELEGRAM_BOT_TOKEN else '❌ Chybí'}")
+    print(f"   TELEGRAM_CHAT_ID: {'✅ Nastaveno' if TELEGRAM_CHAT_ID else '⚠️  Volitelné (bot odpovídá všem)'}")
+    print()
     
     # Vytvoření aplikace
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
