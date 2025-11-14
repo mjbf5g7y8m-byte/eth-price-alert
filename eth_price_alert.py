@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ETH Price Alert Bot
-Sleduje cenu ETH a posílá upozornění na Telegram při změně o 10% od posledního upozornění.
+Sleduje cenu ETH a posílá upozornění na Telegram při změně o 0.1% od posledního upozornění.
 """
 
 import json
@@ -16,7 +16,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 STATE_FILE = 'eth_price_state.json'
 CHECK_INTERVAL = 60  # Kontrola každou minutu (v sekundách)
 PRICE_API_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd'
-PRICE_CHANGE_THRESHOLD = 0.10  # 10% změna
+PRICE_CHANGE_THRESHOLD = 0.001  # 0.1% změna
 
 
 def load_state():
