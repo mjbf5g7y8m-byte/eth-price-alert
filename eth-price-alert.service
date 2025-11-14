@@ -1,0 +1,17 @@
+[Unit]
+Description=ETH Price Alert Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/eth_price_alert
+Environment="TELEGRAM_BOT_TOKEN=8340628343:AAE3-khZ5GtvaLp96O3n4_D3qyamhnU8rB8"
+Environment="TELEGRAM_CHAT_ID=351517996"
+ExecStart=/usr/bin/python3 /root/eth_price_alert/eth_price_alert.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

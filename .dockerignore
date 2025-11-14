@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+eth_price_state.json
+.env
+.venv/
+venv/
+*.md
+.git/
+.gitignore
+
