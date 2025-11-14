@@ -158,9 +158,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 <b>Crypto Price Alert Bot</b>\n\n"
         "Použití:\n"
-        "/add <TICKER> - Přidá kryptoměnu ke sledování\n"
+        "/add TICKER - Přidá kryptoměnu ke sledování\n"
         "/list - Zobrazí seznam sledovaných kryptoměn\n"
-        "/remove <TICKER> - Odebere kryptoměnu ze sledování\n"
+        "/remove TICKER - Odebere kryptoměnu ze sledování\n"
         "/help - Zobrazí nápovědu\n\n"
         "Příklad: /add BTC",
         parse_mode='HTML'
@@ -333,9 +333,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 <b>Nápověda</b>\n\n"
         "<b>Příkazy:</b>\n"
         "/start - Zobrazí úvodní zprávu\n"
-        "/add <TICKER> - Přidá kryptoměnu ke sledování\n"
+        "/add TICKER - Přidá kryptoměnu ke sledování\n"
         "/list - Zobrazí seznam sledovaných kryptoměn\n"
-        "/remove <TICKER> - Odebere kryptoměnu ze sledování\n"
+        "/remove TICKER - Odebere kryptoměnu ze sledování\n"
         "/help - Zobrazí tuto nápovědu\n\n"
         "<b>Příklad:</b>\n"
         "/add BTC\n"
