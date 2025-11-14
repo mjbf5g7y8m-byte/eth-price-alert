@@ -170,17 +170,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler pro /add příkaz."""
+    print(f"📱 Příkaz /add od chat_id: {update.effective_chat.id}, args: {context.args}")
+    
     if not context.args:
         await update.message.reply_text(
             "❌ Zadejte ticker kryptoměny\n"
             "Příklad: /add BTC"
         )
-        return
+        return ConversationHandler.END
     
     symbol = context.args[0].upper()
+    print(f"🔍 Kontroluji ticker: {symbol}")
     
     # Ověříme ticker
     is_valid, name, price = validate_ticker(symbol)
+    print(f"🔍 Výsledek validace: is_valid={is_valid}, name={name}, price={price}")
     
     if not is_valid:
         await update.message.reply_text(
@@ -233,6 +237,7 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'threshold': threshold
         }
         save_config(config)
+        print(f"💾 Uloženo do konfigurace: {symbol} = {config[symbol]}")
         
         # Načteme a aktualizujeme stav
         state = load_state()
@@ -242,6 +247,14 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'last_notification_time': None
             }
         save_state(state)
+        print(f"💾 Uloženo do stavu: {symbol}")
+        
+        # Ověříme, že se to skutečně uložilo
+        verify_config = load_config()
+        if symbol in verify_config:
+            print(f"✅ Ověření: {symbol} je v konfiguraci: {verify_config[symbol]}")
+        else:
+            print(f"❌ CHYBA: {symbol} NENÍ v konfiguraci po uložení!")
         
         await update.message.reply_text(
             f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
