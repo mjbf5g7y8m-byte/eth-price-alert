@@ -403,23 +403,11 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             print(f"❌ CHYBA: {symbol} NENÍ v konfiguraci po uložení!")
         
-        # Získáme aktuální konfiguraci pro zobrazení v logách
-        current_config = load_config()
-        config_json = json.dumps(current_config)
-        state_json = json.dumps(state)
-        
-        print(f"\n{'='*60}")
-        print(f"💡 PRO PERSISTENTNÍ ULOŽENÍ V CLOUDU:")
-        print(f"{'='*60}")
-        print(f"CRYPTO_CONFIG={config_json}")
-        print(f"CRYPTO_STATE={state_json}")
-        print(f"{'='*60}\n")
-        
         await update.message.reply_text(
             f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
             f"📊 Threshold: <b>{threshold*100}%</b>\n"
             f"💰 Aktuální cena: <b>${context.user_data.get('pending_price', 0):,.2f}</b>\n\n"
-            "💾 Data jsou automaticky uložena v databázi." if DATABASE_URL else "💾 Data jsou uložena lokálně.",
+            + ("💾 Data jsou automaticky uložena v databázi." if DATABASE_URL else "💾 Data jsou uložena lokálně."),
             parse_mode='HTML'
         )
         
