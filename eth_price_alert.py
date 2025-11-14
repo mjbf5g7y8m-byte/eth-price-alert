@@ -432,7 +432,7 @@ async def price_check_loop(application: Application):
             await asyncio.sleep(CHECK_INTERVAL)
 
 
-async def main():
+def main():
     """Hlavní funkce."""
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Chyba: Nastavte proměnnou prostředí TELEGRAM_BOT_TOKEN")
@@ -471,9 +471,9 @@ async def main():
     print("🤖 Telegram bot připraven")
     print("📱 Posílejte příkazy na Telegram (/start, /add, /list, atd.)")
     
-    # Spuštění bota
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Spuštění bota (run_polling má vlastní event loop management)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
