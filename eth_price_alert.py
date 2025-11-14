@@ -278,7 +278,9 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_cryptos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler pro /list příkaz."""
+    print(f"📱 Příkaz /list od chat_id: {update.effective_chat.id}")
     config = load_config()
+    print(f"📋 Načtená konfigurace: {config}")
     state = load_state()
     
     if not config:
