@@ -451,14 +451,14 @@ def main():
     application.add_handler(CommandHandler('remove', remove_crypto))
     application.add_handler(CommandHandler('help', help_command))
     
+    print("🤖 Telegram bot připraven")
+    print("📱 Posílejte příkazy na Telegram (/start, /add, /list, atd.)")
+    
     # Spuštění price check loop jako background task
     async def post_init(app: Application):
         asyncio.create_task(price_check_loop(app))
     
     application.post_init = post_init
-    
-    print("🤖 Telegram bot připraven")
-    print("📱 Posílejte příkazy na Telegram (/start, /add, /list, atd.)")
     
     # Spuštění bota
     application.run_polling(allowed_updates=Update.ALL_TYPES)
