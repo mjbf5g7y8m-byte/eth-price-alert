@@ -308,9 +308,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/add TICKER - Přidá kryptoměnu ke sledování\n"
         "/list - Zobrazí seznam sledovaných kryptoměn\n"
         "/update - Změní threshold pro sledovanou kryptoměnu\n"
+        "/setall THRESHOLD - Nastaví threshold pro všechny kryptoměny\n"
         "/remove TICKER - Odebere kryptoměnu ze sledování\n"
         "/help - Zobrazí nápovědu\n\n"
-        "Příklad: /add BTC",
+        "Příklad: /add BTC nebo /setall 5",
         parse_mode='HTML'
     )
 
@@ -487,6 +488,56 @@ async def remove_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def setall_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pro /setall příkaz - nastaví threshold pro všechny kryptoměny."""
+    config = load_config()
+    if not config:
+        await update.message.reply_text(
+            "❌ Momentálně nesleduji žádné kryptoměny. Použijte /add pro přidání.",
+            parse_mode='HTML'
+        )
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Zadejte threshold v procentech\n"
+            "Příklad: /setall 5 (pro 5%)"
+        )
+        return
+    
+    try:
+        threshold_input = context.args[0]
+        threshold = float(threshold_input) / 100  # Převod z procent na desetinné číslo
+        
+        if threshold <= 0:
+            await update.message.reply_text(
+                "❌ Threshold musí být větší než 0.\n"
+                "Příklad: /setall 5 (pro 5%)"
+            )
+            return
+        
+        # Aktualizujeme všechny kryptoměny
+        updated_count = 0
+        for symbol in config.keys():
+            config[symbol]['threshold'] = threshold
+            updated_count += 1
+        
+        save_config(config)
+        
+        await update.message.reply_text(
+            f"✅ Threshold nastaven na <b>{threshold*100}%</b> pro všechny kryptoměny!\n\n"
+            f"📊 Aktualizováno: <b>{updated_count}</b> kryptoměn\n\n"
+            "💾 Data jsou automaticky uložena v databázi." if DATABASE_URL else "💾 Data jsou uložena lokálně.",
+            parse_mode='HTML'
+        )
+        
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Neplatný formát. Zadejte číslo (např. 5 pro 5%):\n"
+            "Příklad: /setall 5"
+        )
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler pro /help příkaz."""
     chat_id = update.effective_chat.id
@@ -499,11 +550,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/add TICKER - Přidá kryptoměnu ke sledování\n"
         "/list - Zobrazí seznam sledovaných kryptoměn\n"
         "/update - Změní threshold pro sledovanou kryptoměnu\n"
+        "/setall THRESHOLD - Nastaví threshold pro všechny kryptoměny\n"
         "/remove TICKER - Odebere kryptoměnu ze sledování\n"
         "/help - Zobrazí tuto nápovědu\n\n"
         "<b>Příklad:</b>\n"
         "/add BTC\n"
         "Bot se zeptá na threshold (např. 0.1 pro 0.1%)\n\n"
+        "/setall 5\n"
+        "Nastaví všechny kryptoměny na 5% threshold\n\n"
         "/update\n"
         "Vyberete kryptoměnu a zadáte nový threshold\n\n"
         "Bot pak bude posílat upozornění při změně ceny o nastavené procento.",
