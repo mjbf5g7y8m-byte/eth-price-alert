@@ -37,20 +37,47 @@ DEFAULT_CRYPTOS = [
 
 
 def load_state():
-    """Načte poslední stav z souboru."""
+    """Načte stav (poslední ceny a časy notifikací)."""
+    # Zkusíme načíst z environment variable (pro persistentní uložení)
+    env_state = os.getenv('CRYPTO_STATE')
+    if env_state:
+        try:
+            state = json.loads(env_state)
+            if state:
+                print(f"📊 Načten stav z environment variable: {len(state)} kryptoměn")
+                return state
+        except (json.JSONDecodeError, ValueError):
+            pass
+    
+    # Fallback na soubor (pro lokální vývoj)
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, 'r') as f:
-                return json.load(f)
+                state = json.load(f)
+                if state:
+                    print(f"📊 Načten stav ze souboru: {len(state)} kryptoměn")
+                    return state
         except (json.JSONDecodeError, IOError):
             pass
+    
     return {}
 
 
 def save_state(state):
     """Uloží stav do souboru."""
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f, indent=2)
+    # Uložíme do souboru (pro lokální vývoj)
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2)
+        print(f"💾 Stav uložen do souboru: {len(state)} kryptoměn")
+    except IOError as e:
+        print(f"⚠️  Chyba při ukládání stavu do souboru: {e}")
+    
+    # Uložíme také do environment variable (pro persistentní uložení v cloudu)
+    # POZNÁMKA: Environment variables na Render jsou persistentní a přežijí redeploy
+    state_json = json.dumps(state)
+    print(f"💡 Pro persistentní uložení v cloudu nastavte environment variable CRYPTO_STATE na Render:")
+    print(f"   {state_json[:100]}..." if len(state_json) > 100 else f"   {state_json}")
 
 
 def load_config():
