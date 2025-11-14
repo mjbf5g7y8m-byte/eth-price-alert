@@ -9,6 +9,7 @@ import os
 import time
 import requests
 import asyncio
+import psycopg2
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
@@ -20,6 +21,9 @@ STATE_FILE = 'crypto_price_state.json'
 CONFIG_FILE = 'crypto_config.json'
 CHECK_INTERVAL = 60  # Kontrola každou minutu (v sekundách)
 CRYPTOCOMPARE_API_KEY = os.getenv('CRYPTOCOMPARE_API_KEY', '7ffa2f0b80215a9e12406537b44f7dafc8deda54354efcfda93fac2eaaaeaf20')
+
+# Databázové připojení (Render PostgreSQL)
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Stavy konverzace
 WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD = range(3)
@@ -82,16 +86,26 @@ def save_state(state):
 
 def load_config():
     """Načte konfiguraci uživatele (sledované kryptoměny a thresholdy)."""
-    # Zkusíme načíst z environment variable (pro persistentní uložení)
-    env_config = os.getenv('CRYPTO_CONFIG')
-    if env_config:
+    # Zkusíme načíst z databáze
+    conn = get_db_connection()
+    if conn:
         try:
-            config = json.loads(env_config)
-            if config:
-                print(f"📋 Načtena konfigurace z environment variable: {len(config)} kryptoměn")
-                return config
-        except (json.JSONDecodeError, ValueError):
-            pass
+            cur = conn.cursor()
+            cur.execute("SELECT data FROM crypto_config ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                config = row[0]
+                if config:
+                    print(f"📋 Načtena konfigurace z databáze: {len(config)} kryptoměn")
+                    cur.close()
+                    conn.close()
+                    return config
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"⚠️  Chyba při načítání konfigurace z databáze: {e}")
+            if conn:
+                conn.close()
     
     # Fallback na soubor (pro lokální vývoj)
     if os.path.exists(CONFIG_FILE):
@@ -111,21 +125,32 @@ def load_config():
 
 
 def save_config(config):
-    """Uloží konfiguraci."""
-    # Uložíme do souboru (pro lokální vývoj)
+    """Uloží konfiguraci do databáze."""
+    # Uložíme do databáze
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            # Smazeme starý záznam a vložíme nový
+            cur.execute("DELETE FROM crypto_config")
+            cur.execute("INSERT INTO crypto_config (data) VALUES (%s)", (json.dumps(config),))
+            conn.commit()
+            cur.close()
+            conn.close()
+            print(f"💾 Konfigurace uložena do databáze: {len(config)} kryptoměn")
+            return
+        except Exception as e:
+            print(f"⚠️  Chyba při ukládání konfigurace do databáze: {e}")
+            if conn:
+                conn.close()
+    
+    # Fallback na soubor (pro lokální vývoj)
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
         print(f"💾 Konfigurace uložena do souboru: {len(config)} kryptoměn")
     except IOError as e:
         print(f"⚠️  Chyba při ukládání do souboru: {e}")
-    
-    # Uložíme také do environment variable (pro persistentní uložení v cloudu)
-    # POZNÁMKA: Environment variables na Render jsou persistentní a přežijí redeploy
-    # Uživatel si musí nastavit CRYPTO_CONFIG v Render dashboardu po prvním nastavení
-    config_json = json.dumps(config)
-    print(f"💡 Pro persistentní uložení v cloudu nastavte environment variable CRYPTO_CONFIG na Render:")
-    print(f"   {config_json[:100]}..." if len(config_json) > 100 else f"   {config_json}")
 
 
 def get_crypto_price(symbol):
@@ -518,23 +543,11 @@ async def handle_update_threshold(update: Update, context: ContextTypes.DEFAULT_
             config[symbol]['threshold'] = threshold
             save_config(config)
             
-            # Zobrazíme hodnoty pro environment variables
-            config_json = json.dumps(config)
-            state = load_state()
-            state_json = json.dumps(state)
-            
-            print(f"\n{'='*60}")
-            print(f"💡 PRO PERSISTENTNÍ ULOŽENÍ V CLOUDU (po update):")
-            print(f"{'='*60}")
-            print(f"CRYPTO_CONFIG={config_json}")
-            print(f"CRYPTO_STATE={state_json}")
-            print(f"{'='*60}\n")
-            
             await update.message.reply_text(
                 f"✅ <b>{name} ({symbol})</b> - threshold aktualizován!\n\n"
                 f"📊 Starý threshold: <b>{old_threshold*100}%</b>\n"
                 f"📊 Nový threshold: <b>{threshold*100}%</b>\n\n"
-                "💡 Aktualizujte CRYPTO_CONFIG na Render (viz logs)",
+                "💾 Data jsou automaticky uložena v databázi.",
                 parse_mode='HTML'
             )
         else:
