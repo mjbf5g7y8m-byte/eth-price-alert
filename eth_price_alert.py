@@ -10,8 +10,8 @@ import time
 import requests
 import asyncio
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 
 # Konfigurace
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -22,7 +22,7 @@ CHECK_INTERVAL = 60  # Kontrola každou minutu (v sekundách)
 CRYPTOCOMPARE_API_KEY = os.getenv('CRYPTOCOMPARE_API_KEY', '7ffa2f0b80215a9e12406537b44f7dafc8deda54354efcfda93fac2eaaaeaf20')
 
 # Stavy konverzace
-WAITING_TICKER, WAITING_THRESHOLD = range(2)
+WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD = range(3)
 
 # Výchozí kryptoměny (pokud uživatel nic nenastaví)
 DEFAULT_CRYPTOS = [
@@ -160,6 +160,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Použití:\n"
         "/add TICKER - Přidá kryptoměnu ke sledování\n"
         "/list - Zobrazí seznam sledovaných kryptoměn\n"
+        "/update - Změní threshold pro sledovanou kryptoměnu\n"
         "/remove TICKER - Odebere kryptoměnu ze sledování\n"
         "/help - Zobrazí nápovědu\n\n"
         "Příklad: /add BTC",
@@ -335,11 +336,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Zobrazí úvodní zprávu\n"
         "/add TICKER - Přidá kryptoměnu ke sledování\n"
         "/list - Zobrazí seznam sledovaných kryptoměn\n"
+        "/update - Změní threshold pro sledovanou kryptoměnu\n"
         "/remove TICKER - Odebere kryptoměnu ze sledování\n"
         "/help - Zobrazí tuto nápovědu\n\n"
         "<b>Příklad:</b>\n"
         "/add BTC\n"
         "Bot se zeptá na threshold (např. 0.1 pro 0.1%)\n\n"
+        "/update\n"
+        "Vyberete kryptoměnu a zadáte nový threshold\n\n"
         "Bot pak bude posílat upozornění při změně ceny o nastavené procento.",
         parse_mode='HTML'
     )
@@ -350,6 +354,140 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("❌ Operace zrušena.")
     return ConversationHandler.END
+
+
+async def update_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pro /update příkaz - změna thresholdu existující kryptoměny."""
+    config = load_config()
+    if not config:
+        await update.message.reply_text(
+            "❌ Momentálně nesleduji žádné kryptoměny. Použijte /add pro přidání.",
+            parse_mode='HTML'
+        )
+        return ConversationHandler.END
+    
+    if not context.args:
+        # Zobrazíme seznam kryptoměn s inline tlačítky
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        
+        keyboard = []
+        for symbol, data in config.items():
+            name = data.get('name', symbol)
+            threshold = data.get('threshold', 0)
+            keyboard.append([InlineKeyboardButton(
+                f"{name} ({symbol}) - {threshold*100}%",
+                callback_data=f"update_{symbol}"
+            )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Vyberte kryptoměnu, u které chcete změnit threshold:",
+            reply_markup=reply_markup
+        )
+        return ConversationHandler.END
+    
+    # Pokud je zadán symbol jako argument
+    symbol = context.args[0].upper()
+    if symbol not in config:
+        await update.message.reply_text(
+            f"❌ <b>{symbol}</b> není ve sledovaných kryptoměnách.\n"
+            "Použijte /list pro zobrazení seznamu.",
+            parse_mode='HTML'
+        )
+        return ConversationHandler.END
+    
+    name = config[symbol].get('name', symbol)
+    current_threshold = config[symbol].get('threshold', 0)
+    
+    context.user_data['pending_symbol'] = symbol
+    context.user_data['pending_name'] = name
+    
+    await update.message.reply_text(
+        f"📊 <b>{name} ({symbol})</b>\n"
+        f"Aktuální threshold: <b>{current_threshold*100}%</b>\n\n"
+        "Zadejte nový threshold (např. 0.1 pro 0.1%, 5 pro 5%):",
+        parse_mode='HTML'
+    )
+    
+    return WAITING_UPDATE_THRESHOLD
+
+
+async def handle_update_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pro zadání nového thresholdu."""
+    try:
+        threshold_input = update.message.text.strip()
+        threshold = float(threshold_input) / 100  # Převod z procent na desetinné číslo
+        
+        if threshold <= 0:
+            await update.message.reply_text(
+                "❌ Threshold musí být větší než 0.\n"
+                "Zadejte znovu (např. 0.1 pro 0.1%):"
+            )
+            return WAITING_UPDATE_THRESHOLD
+        
+        symbol = context.user_data.get('pending_symbol')
+        name = context.user_data.get('pending_name')
+        
+        if not symbol:
+            await update.message.reply_text("❌ Chyba: Ztracen kontext. Začněte znovu příkazem /update")
+            return ConversationHandler.END
+        
+        # Načteme a aktualizujeme konfiguraci
+        config = load_config()
+        if symbol in config:
+            old_threshold = config[symbol].get('threshold', 0)
+            config[symbol]['threshold'] = threshold
+            save_config(config)
+            
+            await update.message.reply_text(
+                f"✅ <b>{name} ({symbol})</b> - threshold aktualizován!\n\n"
+                f"📊 Starý threshold: <b>{old_threshold*100}%</b>\n"
+                f"📊 Nový threshold: <b>{threshold*100}%</b>",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Kryptoměna {symbol} nebyla nalezena ve sledovaných."
+            )
+        
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Neplatný formát thresholdu. Zadejte číslo (např. 0.1 pro 0.1%):"
+        )
+        return WAITING_UPDATE_THRESHOLD
+
+
+async def update_threshold_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pro callback z inline tlačítka pro změnu thresholdu."""
+    query = update.callback_query
+    await query.answer()
+    
+    symbol = query.data.replace("update_", "")
+    config = load_config()
+    
+    if symbol not in config:
+        await query.edit_message_text(f"❌ Kryptoměna {symbol} nebyla nalezena.")
+        return
+    
+    name = config[symbol].get('name', symbol)
+    current_threshold = config[symbol].get('threshold', 0)
+    
+    # Uložíme do kontextu
+    context.user_data['pending_symbol'] = symbol
+    context.user_data['pending_name'] = name
+    
+    await query.edit_message_text(
+        f"📊 <b>{name} ({symbol})</b>\n"
+        f"Aktuální threshold: <b>{current_threshold*100}%</b>\n\n"
+        "Zadejte nový threshold (např. 0.1 pro 0.1%, 5 pro 5%):",
+        parse_mode='HTML'
+    )
+    
+    # Vrátíme stav pro ConversationHandler
+    return WAITING_UPDATE_THRESHOLD
 
 
 async def price_check_loop(application: Application):
@@ -447,7 +585,7 @@ def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Conversation handler pro přidávání kryptoměn
-    conv_handler = ConversationHandler(
+    add_conv_handler = ConversationHandler(
         entry_points=[CommandHandler('add', add_crypto)],
         states={
             WAITING_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_threshold)],
@@ -455,9 +593,63 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
     )
     
+    # Handler pro zpracování zprávy po callback (když uživatel zadá threshold)
+    async def handle_threshold_after_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler pro zpracování threshold po callback."""
+        if context.user_data.get('waiting_for_threshold'):
+            return await handle_update_threshold(update, context)
+        return None
+    
+    # Conversation handler pro změnu thresholdu
+    update_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('update', update_threshold)],
+        states={
+            WAITING_UPDATE_THRESHOLD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_update_threshold)
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    
+    # Handler pro zpracování zprávy po callback (když uživatel klikne na tlačítko a pak zadá threshold)
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_threshold_after_callback
+    ))
+    
+    # Handler pro callback z inline tlačítka (update threshold)
+    async def update_callback_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Wrapper pro callback, který nastaví kontext a pokračuje v konverzaci."""
+        query = update.callback_query
+        await query.answer()
+        
+        symbol = query.data.replace("update_", "")
+        config = load_config()
+        
+        if symbol not in config:
+            await query.edit_message_text(f"❌ Kryptoměna {symbol} nebyla nalezena.")
+            return
+        
+        name = config[symbol].get('name', symbol)
+        current_threshold = config[symbol].get('threshold', 0)
+        
+        # Uložíme do kontextu
+        context.user_data['pending_symbol'] = symbol
+        context.user_data['pending_name'] = name
+        context.user_data['waiting_for_threshold'] = True
+        
+        await query.edit_message_text(
+            f"📊 <b>{name} ({symbol})</b>\n"
+            f"Aktuální threshold: <b>{current_threshold*100}%</b>\n\n"
+            "Zadejte nový threshold (např. 0.1 pro 0.1%, 5 pro 5%):",
+            parse_mode='HTML'
+        )
+    
     # Registrace handlerů
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(conv_handler)
+    application.add_handler(add_conv_handler)
+    application.add_handler(update_conv_handler)
+    application.add_handler(CallbackQueryHandler(update_callback_wrapper, pattern=r'^update_'))
     application.add_handler(CommandHandler('list', list_cryptos))
     application.add_handler(CommandHandler('remove', remove_crypto))
     application.add_handler(CommandHandler('help', help_command))
