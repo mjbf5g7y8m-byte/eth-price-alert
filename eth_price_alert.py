@@ -279,7 +279,18 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             print(f"❌ CHYBA: {symbol} NENÍ v konfiguraci po uložení!")
         
-        # Upozorníme uživatele, že si musí nastavit environment variables pro persistentní uložení
+        # Získáme aktuální konfiguraci pro zobrazení v logách
+        current_config = load_config()
+        config_json = json.dumps(current_config)
+        state_json = json.dumps(state)
+        
+        print(f"\n{'='*60}")
+        print(f"💡 PRO PERSISTENTNÍ ULOŽENÍ V CLOUDU:")
+        print(f"{'='*60}")
+        print(f"CRYPTO_CONFIG={config_json}")
+        print(f"CRYPTO_STATE={state_json}")
+        print(f"{'='*60}\n")
+        
         await update.message.reply_text(
             f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
             f"📊 Threshold: <b>{threshold*100}%</b>\n"
@@ -287,14 +298,6 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💡 <b>Důležité:</b> Pro uložení dat v cloudu (aby přežily redeploy) nastavte na Render:\n"
             "   Environment Variables → CRYPTO_CONFIG a CRYPTO_STATE\n"
             "   (Viz Render logs pro aktuální hodnoty)",
-            parse_mode='HTML'
-        )
-        
-        await update.message.reply_text(
-            f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
-            f"📊 Threshold: <b>{threshold*100}%</b>\n"
-            f"💰 Aktuální cena: <b>${context.user_data.get('pending_price', 0):,.2f}</b>\n\n"
-            "Bot bude posílat upozornění při změně o nastavené procento.",
             parse_mode='HTML'
         )
         
