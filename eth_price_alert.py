@@ -219,7 +219,10 @@ def main():
             
             # Hlavní pauza před další kontrolou
             print()  # Prázdný řádek pro lepší čitelnost
-            time.sleep(CHECK_INTERVAL - (len(CRYPTOS) * 1))
+            # Počkáme zbytek intervalu (minus čas strávený kontrolou kryptoměn)
+            remaining_time = max(0, CHECK_INTERVAL - (len(CRYPTOS) * 1))
+            if remaining_time > 0:
+                time.sleep(remaining_time)
             
     except KeyboardInterrupt:
         print("\n\n👋 Bot ukončen uživatelem")
