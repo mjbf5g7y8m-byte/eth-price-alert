@@ -40,18 +40,78 @@ DEFAULT_CRYPTOS = [
 ]
 
 
+def get_db_connection():
+    """Vytvoří připojení k databázi."""
+    if not DATABASE_URL:
+        return None
+    try:
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        return conn
+    except Exception as e:
+        print(f"⚠️  Chyba při připojení k databázi: {e}")
+        return None
+
+
+def init_database():
+    """Inicializuje databázové tabulky."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        # Vytvoříme tabulku pro konfiguraci
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS crypto_config (
+                id SERIAL PRIMARY KEY,
+                data JSONB NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Vytvoříme tabulku pro stav
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS crypto_state (
+                id SERIAL PRIMARY KEY,
+                data JSONB NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("✅ Databáze inicializována")
+        return True
+    except Exception as e:
+        print(f"❌ Chyba při inicializaci databáze: {e}")
+        if conn:
+            conn.close()
+        return False
+
+
 def load_state():
     """Načte stav (poslední ceny a časy notifikací)."""
-    # Zkusíme načíst z environment variable (pro persistentní uložení)
-    env_state = os.getenv('CRYPTO_STATE')
-    if env_state:
+    # Zkusíme načíst z databáze
+    conn = get_db_connection()
+    if conn:
         try:
-            state = json.loads(env_state)
-            if state:
-                print(f"📊 Načten stav z environment variable: {len(state)} kryptoměn")
-                return state
-        except (json.JSONDecodeError, ValueError):
-            pass
+            cur = conn.cursor()
+            cur.execute("SELECT data FROM crypto_state ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                state = row[0]
+                if state:
+                    print(f"📊 Načten stav z databáze: {len(state)} kryptoměn")
+                    cur.close()
+                    conn.close()
+                    return state
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"⚠️  Chyba při načítání stavu z databáze: {e}")
+            if conn:
+                conn.close()
     
     # Fallback na soubor (pro lokální vývoj)
     if os.path.exists(STATE_FILE):
@@ -68,20 +128,32 @@ def load_state():
 
 
 def save_state(state):
-    """Uloží stav do souboru."""
-    # Uložíme do souboru (pro lokální vývoj)
+    """Uloží stav do databáze."""
+    # Uložíme do databáze
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            # Smazeme starý záznam a vložíme nový
+            cur.execute("DELETE FROM crypto_state")
+            cur.execute("INSERT INTO crypto_state (data) VALUES (%s)", (json.dumps(state),))
+            conn.commit()
+            cur.close()
+            conn.close()
+            print(f"💾 Stav uložen do databáze: {len(state)} kryptoměn")
+            return
+        except Exception as e:
+            print(f"⚠️  Chyba při ukládání stavu do databáze: {e}")
+            if conn:
+                conn.close()
+    
+    # Fallback na soubor (pro lokální vývoj)
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(state, f, indent=2)
         print(f"💾 Stav uložen do souboru: {len(state)} kryptoměn")
     except IOError as e:
         print(f"⚠️  Chyba při ukládání stavu do souboru: {e}")
-    
-    # Uložíme také do environment variable (pro persistentní uložení v cloudu)
-    # POZNÁMKA: Environment variables na Render jsou persistentní a přežijí redeploy
-    state_json = json.dumps(state)
-    print(f"💡 Pro persistentní uložení v cloudu nastavte environment variable CRYPTO_STATE na Render:")
-    print(f"   {state_json[:100]}..." if len(state_json) > 100 else f"   {state_json}")
 
 
 def load_config():
@@ -347,9 +419,7 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
             f"📊 Threshold: <b>{threshold*100}%</b>\n"
             f"💰 Aktuální cena: <b>${context.user_data.get('pending_price', 0):,.2f}</b>\n\n"
-            "💡 <b>Důležité:</b> Pro uložení dat v cloudu (aby přežily redeploy) nastavte na Render:\n"
-            "   Environment Variables → CRYPTO_CONFIG a CRYPTO_STATE\n"
-            "   (Viz Render logs pro aktuální hodnoty)",
+            "💾 Data jsou automaticky uložena v databázi." if DATABASE_URL else "💾 Data jsou uložena lokálně.",
             parse_mode='HTML'
         )
         
