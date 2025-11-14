@@ -100,15 +100,21 @@ def normalize_chat_id(chat_id):
 
 def main():
     """Hlavní smyčka aplikace."""
+    # Debug: Zobrazíme, co aplikace vidí
+    print("🔍 Debug - Kontrola environment variables:")
+    print(f"   TELEGRAM_BOT_TOKEN: {'✅ Nastaveno' if TELEGRAM_BOT_TOKEN else '❌ Chybí'} ({'prázdné' if not TELEGRAM_BOT_TOKEN else 'má hodnotu'})")
+    print(f"   TELEGRAM_CHAT_ID: {'✅ Nastaveno' if TELEGRAM_CHAT_ID else '❌ Chybí'} ({'prázdné' if not TELEGRAM_CHAT_ID else 'má hodnotu'})")
+    
     # Ověření konfigurace
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ Chyba: Nastavte proměnné prostředí TELEGRAM_BOT_TOKEN a TELEGRAM_CHAT_ID")
+        print("\n❌ Chyba: Nastavte proměnné prostředí TELEGRAM_BOT_TOKEN a TELEGRAM_CHAT_ID")
         print("\nJak získat:")
         print("1. Vytvořte bota přes @BotFather na Telegramu")
         print("2. Získejte chat ID (číslo) nebo username (např. @honzuvbot)")
         print("3. Nastavte proměnné:")
         print("   export TELEGRAM_BOT_TOKEN='váš_token'")
         print("   export TELEGRAM_CHAT_ID='váš_chat_id_nebo_username'")
+        print("\n💡 Na Render: Settings → Environment → Add Environment Variable")
         return
     
     # Normalizace chat ID
