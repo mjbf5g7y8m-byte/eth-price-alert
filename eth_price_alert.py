@@ -191,8 +191,18 @@ def load_config():
             pass
     
     # Výchozí konfigurace (pouze pokud není žádná existující)
+    # Pokud uživatel nic nenastavil, použijeme výchozí kryptoměny s 5% threshold
     config = {}
-    print("📋 Používá se prázdná konfigurace (žádné kryptoměny nejsou nastavené)")
+    for symbol, name in DEFAULT_CRYPTOS:
+        config[symbol] = {
+            'name': name,
+            'threshold': 0.05  # 5% default
+        }
+    if config:
+        save_config(config)
+        print(f"📋 Používá se výchozí konfigurace: {len(config)} kryptoměn s 5% threshold")
+    else:
+        print("📋 Používá se prázdná konfigurace (žádné kryptoměny nejsou nastavené)")
     return config
 
 
@@ -726,7 +736,7 @@ async def price_check_loop(application: Application):
             
             for symbol, crypto_config in config.items():
                 name = crypto_config.get('name', symbol)
-                threshold = crypto_config.get('threshold', 0.001)
+                threshold = crypto_config.get('threshold', 0.05)  # 5% default
                 
                 # Získání aktuální ceny
                 current_price = get_crypto_price(symbol)
