@@ -55,27 +55,50 @@ def save_state(state):
 
 def load_config():
     """Načte konfiguraci uživatele (sledované kryptoměny a thresholdy)."""
+    # Zkusíme načíst z environment variable (pro persistentní uložení)
+    env_config = os.getenv('CRYPTO_CONFIG')
+    if env_config:
+        try:
+            config = json.loads(env_config)
+            if config:
+                print(f"📋 Načtena konfigurace z environment variable: {len(config)} kryptoměn")
+                return config
+        except (json.JSONDecodeError, ValueError):
+            pass
+    
+    # Fallback na soubor (pro lokální vývoj)
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
-                return json.load(f)
+                config = json.load(f)
+                if config:
+                    print(f"📋 Načtena konfigurace ze souboru: {len(config)} kryptoměn")
+                    return config
         except (json.JSONDecodeError, IOError):
             pass
-    # Výchozí konfigurace
+    
+    # Výchozí konfigurace (pouze pokud není žádná existující)
     config = {}
-    for symbol, name in DEFAULT_CRYPTOS:
-        config[symbol] = {
-            'name': name,
-            'threshold': 0.001  # 0.1% default
-        }
-    save_config(config)
+    print("📋 Používá se prázdná konfigurace (žádné kryptoměny nejsou nastavené)")
     return config
 
 
 def save_config(config):
     """Uloží konfiguraci."""
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
+    # Uložíme do souboru (pro lokální vývoj)
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        print(f"💾 Konfigurace uložena do souboru: {len(config)} kryptoměn")
+    except IOError as e:
+        print(f"⚠️  Chyba při ukládání do souboru: {e}")
+    
+    # Uložíme také do environment variable (pro persistentní uložení v cloudu)
+    # POZNÁMKA: Environment variables na Render jsou persistentní a přežijí redeploy
+    # Uživatel si musí nastavit CRYPTO_CONFIG v Render dashboardu po prvním nastavení
+    config_json = json.dumps(config)
+    print(f"💡 Pro persistentní uložení v cloudu nastavte environment variable CRYPTO_CONFIG na Render:")
+    print(f"   {config_json[:100]}..." if len(config_json) > 100 else f"   {config_json}")
 
 
 def get_crypto_price(symbol):
@@ -255,6 +278,17 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"✅ Ověření: {symbol} je v konfiguraci: {verify_config[symbol]}")
         else:
             print(f"❌ CHYBA: {symbol} NENÍ v konfiguraci po uložení!")
+        
+        # Upozorníme uživatele, že si musí nastavit environment variables pro persistentní uložení
+        await update.message.reply_text(
+            f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
+            f"📊 Threshold: <b>{threshold*100}%</b>\n"
+            f"💰 Aktuální cena: <b>${context.user_data.get('pending_price', 0):,.2f}</b>\n\n"
+            "💡 <b>Důležité:</b> Pro uložení dat v cloudu (aby přežily redeploy) nastavte na Render:\n"
+            "   Environment Variables → CRYPTO_CONFIG a CRYPTO_STATE\n"
+            "   (Viz Render logs pro aktuální hodnoty)",
+            parse_mode='HTML'
+        )
         
         await update.message.reply_text(
             f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
@@ -454,10 +488,23 @@ async def handle_update_threshold(update: Update, context: ContextTypes.DEFAULT_
             config[symbol]['threshold'] = threshold
             save_config(config)
             
+            # Zobrazíme hodnoty pro environment variables
+            config_json = json.dumps(config)
+            state = load_state()
+            state_json = json.dumps(state)
+            
+            print(f"\n{'='*60}")
+            print(f"💡 PRO PERSISTENTNÍ ULOŽENÍ V CLOUDU (po update):")
+            print(f"{'='*60}")
+            print(f"CRYPTO_CONFIG={config_json}")
+            print(f"CRYPTO_STATE={state_json}")
+            print(f"{'='*60}\n")
+            
             await update.message.reply_text(
                 f"✅ <b>{name} ({symbol})</b> - threshold aktualizován!\n\n"
                 f"📊 Starý threshold: <b>{old_threshold*100}%</b>\n"
-                f"📊 Nový threshold: <b>{threshold*100}%</b>",
+                f"📊 Nový threshold: <b>{threshold*100}%</b>\n\n"
+                "💡 Aktualizujte CRYPTO_CONFIG na Render (viz logs)",
                 parse_mode='HTML'
             )
         else:
