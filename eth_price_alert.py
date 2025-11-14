@@ -868,6 +868,7 @@ def main():
     application.add_handler(update_conv_handler)
     application.add_handler(CallbackQueryHandler(update_callback_wrapper, pattern=r'^update_'))
     application.add_handler(CommandHandler('list', list_cryptos))
+    application.add_handler(CommandHandler('setall', setall_threshold))
     application.add_handler(CommandHandler('remove', remove_crypto))
     application.add_handler(CommandHandler('help', help_command))
     
