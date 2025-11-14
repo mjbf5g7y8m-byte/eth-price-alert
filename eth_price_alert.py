@@ -448,7 +448,7 @@ async def list_cryptos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = "📋 <b>Sledované kryptoměny:</b>\n\n"
     for symbol, crypto_config in config.items():
         name = crypto_config.get('name', symbol)
-        threshold = crypto_config.get('threshold', 0.001) * 100
+        threshold = crypto_config.get('threshold', 0.05) * 100  # 5% default
         last_price = state.get(symbol, {}).get('last_notification_price')
         
         if last_price:
