@@ -15,7 +15,8 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 STATE_FILE = 'eth_price_state.json'
 CHECK_INTERVAL = 60  # Kontrola každou minutu (v sekundách)
-PRICE_API_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd'
+CRYPTOCOMPARE_API_KEY = os.getenv('CRYPTOCOMPARE_API_KEY', '7ffa2f0b80215a9e12406537b44f7dafc8deda54354efcfda93fac2eaaaeaf20')
+PRICE_API_URL = f'https://min-api.cryptocompare.com/data/price?fsym=ETH&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}'
 PRICE_CHANGE_THRESHOLD = 0.001  # 0.1% změna
 
 
@@ -37,13 +38,21 @@ def save_state(state):
 
 
 def get_eth_price():
-    """Získá aktuální cenu ETH z CoinGecko API."""
+    """Získá aktuální cenu ETH z CryptoCompare API."""
     try:
         response = requests.get(PRICE_API_URL, timeout=10)
         response.raise_for_status()
         data = response.json()
-        return data['ethereum']['usd']
-    except (requests.RequestException, KeyError) as e:
+        # CryptoCompare vrací {"USD": cena} nebo chybu
+        if 'USD' in data:
+            return float(data['USD'])
+        elif 'Response' in data and data['Response'] == 'Error':
+            print(f"Chyba CryptoCompare API: {data.get('Message', 'Neznámá chyba')}")
+            return None
+        else:
+            print(f"Neočekávaná odpověď API: {data}")
+            return None
+    except (requests.RequestException, KeyError, ValueError) as e:
         print(f"Chyba při získávání ceny: {e}")
         return None
 
