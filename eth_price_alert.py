@@ -10,6 +10,7 @@ import time
 import requests
 import asyncio
 import atexit
+import random
 import psycopg2
 from psycopg2 import OperationalError, Error as Psycopg2Error
 from datetime import datetime
@@ -248,83 +249,136 @@ def save_config(config):
         print(f"⚠️  Chyba při ukládání do souboru: {e}")
 
 
+def get_price_from_cryptocompare(symbol):
+    """Získá cenu z CryptoCompare API."""
+    url = f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD'
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if 'USD' in data:
+            return float(data['USD']), 'CryptoCompare'
+    except:
+        pass
+    return None, None
+
+
+def get_price_from_coingecko(symbol):
+    """Získá cenu z CoinGecko API."""
+    # CoinGecko používá jiné ID pro některé kryptoměny
+    symbol_map = {
+        'BTC': 'bitcoin',
+        'ETH': 'ethereum',
+        'AAVE': 'aave',
+        'ZEC': 'zcash',
+        'ICP': 'internet-computer',
+        'COW': 'cow-protocol',
+        'GNO': 'gnosis',
+    }
+    
+    coin_id = symbol_map.get(symbol.upper(), symbol.lower())
+    url = f'https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd'
+    
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if coin_id in data and 'usd' in data[coin_id]:
+            return float(data[coin_id]['usd']), 'CoinGecko'
+    except:
+        pass
+    return None, None
+
+
+def get_price_from_binance(symbol):
+    """Získá cenu z Binance API."""
+    # Binance používá symbol ve formátu BTCUSDT
+    symbol_map = {
+        'BTC': 'BTCUSDT',
+        'ETH': 'ETHUSDT',
+        'AAVE': 'AAVEUSDT',
+        'ZEC': 'ZECUSDT',
+        'ICP': 'ICPUSDT',
+        'COW': 'COWUSDT',  # Možná není dostupné
+        'GNO': 'GNOUSDT',  # Možná není dostupné
+    }
+    
+    binance_symbol = symbol_map.get(symbol.upper())
+    if not binance_symbol:
+        return None, None
+    
+    url = f'https://api.binance.com/api/v3/ticker/price?symbol={binance_symbol}'
+    
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if 'price' in data:
+            return float(data['price']), 'Binance'
+    except:
+        pass
+    return None, None
+
+
+def get_price_from_coincap(symbol):
+    """Získá cenu z CoinCap API."""
+    url = f'https://api.coincap.io/v2/assets/{symbol.lower()}'
+    
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if 'data' in data and 'priceUsd' in data['data']:
+            return float(data['data']['priceUsd']), 'CoinCap'
+    except:
+        pass
+    return None, None
+
+
 def get_crypto_price(symbol, max_retries=2):
-    """Získá aktuální cenu kryptoměny z CryptoCompare API s retry logikou."""
-    # Zkusíme bez API key nejdřív (free tier) - API key je přes rate limit
-    urls = [
-        f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD',
+    """Získá aktuální cenu kryptoměny z náhodně vybraného API pro rozložení zátěže."""
+    # Seznam všech dostupných API funkcí
+    api_functions = [
+        get_price_from_cryptocompare,
+        get_price_from_coingecko,
+        get_price_from_binance,
+        get_price_from_coincap,
     ]
     
-    # Přidáme API key URL jen pokud není přes limit (ale aktuálně je, takže ho přeskočíme)
-    # urls.append(f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}')
+    # Náhodně zamícháme pořadí API pro distribuci zátěže
+    shuffled_apis = random.sample(api_functions, len(api_functions))
     
-    for url_index, url in enumerate(urls):
+    for api_func in shuffled_apis:
         for attempt in range(max_retries):
             try:
-                response = requests.get(url, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                
-                # Debug: vypíšeme odpověď pro první pokus
-                if attempt == 0:
-                    print(f"🔍 [{symbol}] API Response: {data}")
-                
-                if 'USD' in data:
-                    price = float(data['USD'])
+                price, api_name = api_func(symbol)
+                if price is not None:
                     if attempt == 0:
-                        print(f"✅ [{symbol}] Cena získána: ${price:,.2f}")
+                        print(f"✅ [{symbol}] Cena získána z {api_name}: ${price:,.2f}")
                     return price
-                elif 'Response' in data and data['Response'] == 'Error':
-                    error_msg = data.get('Message', 'Unknown error')
-                    # Pokud je to rate limit error, zkusíme bez API key (což už děláme)
-                    if 'rate limit' in error_msg.lower():
-                        print(f"⚠️  [{symbol}] Rate limit - používám free tier")
-                        # Už používáme free tier, takže jen logujeme
-                        if attempt == max_retries - 1:
-                            print(f"❌ API Error pro {symbol}: {error_msg}")
-                    else:
-                        if attempt == max_retries - 1:
-                            print(f"❌ API Error pro {symbol}: {error_msg}")
-                    # Zkusíme další pokus
-                    if attempt < max_retries - 1:
-                        time.sleep(1)
-                    continue
-                else:
-                    if url_index == len(urls) - 1 and attempt == max_retries - 1:
-                        print(f"⚠️  Neočekávaná odpověď pro {symbol}: {data}")
-                    # Zkusíme další URL
-                    break
-            except requests.Timeout:
-                if url_index == len(urls) - 1 and attempt == max_retries - 1:
-                    print(f"⏱️  Timeout při získávání ceny pro {symbol}")
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-                continue
-            except requests.HTTPError as e:
-                if url_index == len(urls) - 1 and attempt == max_retries - 1:
-                    print(f"❌ HTTP Error pro {symbol}: Status {response.status_code}")
-                    print(f"   Response: {response.text[:200]}")
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-                continue
-            except requests.RequestException as e:
-                if url_index == len(urls) - 1 and attempt == max_retries - 1:
-                    print(f"❌ Request Exception pro {symbol}: {type(e).__name__}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-                continue
-            except (KeyError, ValueError) as e:
-                if url_index == len(urls) - 1 and attempt == max_retries - 1:
-                    print(f"❌ Parsing Error pro {symbol}: {e}")
-                # Zkusíme další URL
+                # Pokud API nevrátilo cenu, zkusíme další API
                 break
             except Exception as e:
-                if url_index == len(urls) - 1 and attempt == max_retries - 1:
-                    print(f"❌ Nečekaná chyba pro {symbol}: {type(e).__name__}: {e}")
+                if attempt == max_retries - 1:
+                    print(f"⚠️  [{symbol}] Chyba při získávání z {api_func.__name__}: {type(e).__name__}")
                 if attempt < max_retries - 1:
-                    time.sleep(1)
+                    time.sleep(0.5)  # Krátká pauza před dalším pokusem
                 continue
     
+    # Pokud všechna API selhala, zkusíme ještě jednou s delší pauzou
+    print(f"❌ [{symbol}] Všechna API selhala, zkouším znovu...")
+    time.sleep(1)
+    
+    for api_func in shuffled_apis:
+        try:
+            price, api_name = api_func(symbol)
+            if price is not None:
+                print(f"✅ [{symbol}] Cena získána z {api_name} (retry): ${price:,.2f}")
+                return price
+        except:
+            continue
+    
+    print(f"❌ [{symbol}] Nepodařilo se získat cenu z žádného API")
     return None
 
 
