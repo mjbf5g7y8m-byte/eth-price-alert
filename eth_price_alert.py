@@ -9,11 +9,13 @@ import os
 import time
 import requests
 import asyncio
+import atexit
 import psycopg2
 from psycopg2 import OperationalError, Error as Psycopg2Error
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+from telegram.error import Conflict, NetworkError, TimedOut
 
 # Konfigurace
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -246,21 +248,38 @@ def save_config(config):
         print(f"⚠️  Chyba při ukládání do souboru: {e}")
 
 
-def get_crypto_price(symbol):
-    """Získá aktuální cenu kryptoměny z CryptoCompare API."""
-    try:
-        url = f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}'
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if 'USD' in data:
-            return float(data['USD'])
-        elif 'Response' in data and data['Response'] == 'Error':
+def get_crypto_price(symbol, max_retries=3):
+    """Získá aktuální cenu kryptoměny z CryptoCompare API s retry logikou."""
+    for attempt in range(max_retries):
+        try:
+            url = f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}'
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            if 'USD' in data:
+                return float(data['USD'])
+            elif 'Response' in data and data['Response'] == 'Error':
+                error_msg = data.get('Message', 'Unknown error')
+                if attempt == max_retries - 1:
+                    print(f"⚠️  API Error pro {symbol}: {error_msg}")
+                return None
+            else:
+                return None
+        except requests.Timeout:
+            if attempt == max_retries - 1:
+                print(f"⚠️  Timeout při získávání ceny pro {symbol} (pokus {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(1)  # Krátká pauza před dalším pokusem
+        except requests.RequestException as e:
+            if attempt == max_retries - 1:
+                print(f"⚠️  Chyba při získávání ceny pro {symbol}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+        except (KeyError, ValueError) as e:
+            if attempt == max_retries - 1:
+                print(f"⚠️  Chyba při parsování odpovědi pro {symbol}: {e}")
             return None
-        else:
-            return None
-    except (requests.RequestException, KeyError, ValueError):
-        return None
+    return None
 
 
 def validate_ticker(symbol):
@@ -728,12 +747,12 @@ async def update_threshold_callback(update: Update, context: ContextTypes.DEFAUL
     return WAITING_UPDATE_THRESHOLD
 
 
-async def price_check_loop(application: Application):
+async def price_check_loop(application: Application, stop_event: asyncio.Event):
     """Hlavní smyčka pro kontrolu cen."""
     print("🚀 Crypto Price Alert Bot spuštěn")
     print(f"⏱️  Kontrola každých {CHECK_INTERVAL} sekund\n")
     
-    while True:
+    while not stop_event.is_set():
         try:
             config = load_config()
             state = load_state()
@@ -801,11 +820,26 @@ async def price_check_loop(application: Application):
             print()  # Prázdný řádek
             remaining_time = max(0, CHECK_INTERVAL - (len(config) * 1))
             if remaining_time > 0:
-                await asyncio.sleep(remaining_time)
+                # Použijeme wait_for s timeout, abychom mohli reagovat na stop_event
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=remaining_time)
+                    break  # Pokud byl nastaven stop_event, ukončíme smyčku
+                except asyncio.TimeoutError:
+                    pass  # Timeout je očekávaný, pokračujeme
                 
+        except asyncio.CancelledError:
+            print("🛑 Price check loop byl zrušen")
+            break
         except Exception as e:
             print(f"❌ Chyba v price check loop: {e}")
-            await asyncio.sleep(CHECK_INTERVAL)
+            # Použijeme wait_for místo sleep, abychom mohli reagovat na stop_event
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=CHECK_INTERVAL)
+                break
+            except asyncio.TimeoutError:
+                pass
+    
+    print("✅ Price check loop ukončen")
 
 
 def main():
@@ -906,17 +940,81 @@ def main():
     application.add_handler(CommandHandler('remove', remove_crypto))
     application.add_handler(CommandHandler('help', help_command))
     
+    # Error handlers
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        """Handler pro chyby v bot aplikaci."""
+        error = context.error
+        
+        # Zpracování Conflict chyby (více instancí bota)
+        if isinstance(error, Conflict):
+            # Conflict obvykle nastává při redeploy, když běží stará i nová instance
+            # python-telegram-bot automaticky retryuje, takže jen logujeme
+            # Stará instance bude automaticky ukončena Renderem
+            print(f"⚠️  Conflict: Jiná instance bota je spuštěna (pravděpodobně redeploy).")
+            print(f"   Aplikace se pokusí znovu připojit automaticky...")
+            # Nenastavujeme stop_event - necháme aplikaci pokračovat a retryovat
+            return
+        
+        # Zpracování síťových chyb
+        if isinstance(error, (NetworkError, TimedOut)):
+            print(f"⚠️  Síťová chyba: {error}. Pokračuji...")
+            return
+        
+        # Ostatní chyby
+        print(f"❌ Chyba v bot aplikaci: {error}")
+        if update:
+            print(f"   Update: {update}")
+        if context:
+            print(f"   Context: {context}")
+    
+    application.add_error_handler(error_handler)
+    
     # Spuštění price check loop jako background task
+    stop_event = asyncio.Event()
+    price_check_task = None
+    
     async def post_init(app: Application):
-        asyncio.create_task(price_check_loop(app))
+        nonlocal price_check_task
+        app._stop_event = stop_event
+        app._price_check_task = asyncio.create_task(price_check_loop(app, stop_event))
+        price_check_task = app._price_check_task
     
     application.post_init = post_init
+    
+    # Cleanup funkce pro graceful shutdown
+    def cleanup():
+        """Cleanup při ukončení aplikace."""
+        print("🛑 Ukončuji aplikaci...")
+        if stop_event:
+            stop_event.set()
+        if price_check_task and not price_check_task.done():
+            print("🛑 Zrušuji price check loop...")
+            price_check_task.cancel()
+        print("✅ Cleanup dokončen")
+    
+    atexit.register(cleanup)
     
     print("🤖 Telegram bot připraven")
     print("📱 Posílejte příkazy na Telegram (/start, /add, /list, atd.)")
     
-    # Spuštění bota (run_polling má vlastní event loop management)
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Spuštění bota s lepším error handlingem
+    try:
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,  # Ignoruje pending updates při startu
+            stop_signals=None  # Nezastavujeme na signálech, necháme Render to řídit
+        )
+    except Conflict as e:
+        print(f"⚠️  Conflict při spuštění: {e}")
+        print("   Jiná instance bota je již spuštěna. Ukončuji...")
+        cleanup()
+    except KeyboardInterrupt:
+        print("\n🛑 Přerušeno uživatelem")
+        cleanup()
+    except Exception as e:
+        print(f"❌ Kritická chyba při spuštění bota: {e}")
+        cleanup()
+        raise
 
 
 if __name__ == '__main__':
