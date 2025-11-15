@@ -274,6 +274,7 @@ def get_price_from_coingecko(symbol):
         'ICP': 'internet-computer',
         'COW': 'cow-protocol',
         'GNO': 'gnosis',
+        'LTC': 'litecoin',
     }
     
     coin_id = symbol_map.get(symbol.upper(), symbol.lower())
@@ -301,6 +302,7 @@ def get_price_from_binance(symbol):
         'ICP': 'ICPUSDT',
         'COW': 'COWUSDT',  # Možná není dostupné
         'GNO': 'GNOUSDT',  # Možná není dostupné
+        'LTC': 'LTCUSDT',
     }
     
     binance_symbol = symbol_map.get(symbol.upper())
@@ -541,8 +543,10 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         verify_config = load_config()
         if symbol in verify_config:
             print(f"✅ Ověření: {symbol} je v konfiguraci: {verify_config[symbol]}")
+            print(f"📋 Celkem kryptoměn v konfiguraci: {len(verify_config)}")
         else:
             print(f"❌ CHYBA: {symbol} NENÍ v konfiguraci po uložení!")
+            print(f"📋 Dostupné kryptoměny: {list(verify_config.keys())}")
         
         await update.message.reply_text(
             f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
