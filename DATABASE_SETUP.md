@@ -48,10 +48,11 @@ Data se nyní ukládají automaticky do PostgreSQL databáze, která je persiste
 
 ## Co se stane po nastavení:
 
-1. Při prvním spuštění se vytvoří tabulky v databázi
-2. Při přidání kryptoměny přes `/add` se data uloží do databáze
-3. Při změně threshold přes `/update` se data aktualizují v databázi
-4. Data přežijí redeploy a restart service
+1. **Při prvním spuštění** se automaticky vytvoří tabulky v databázi (aplikace to udělá sama)
+2. **Při přidání kryptoměny** přes `/add` se data uloží do databáze
+3. **Při změně threshold** přes `/update` se data aktualizují v databázi
+4. **Data přežijí redeploy** - při každém push do GitHubu a redeploy na Render se data zachovají
+5. **Při restartu** service se data načtou z databáze
 
 ---
 
@@ -67,4 +68,17 @@ Pokud máte problém s připojením k databázi, zkontrolujte:
 - Jestli je `DATABASE_URL` správně nastavený
 - Jestli je databáze spuštěná (na Render dashboardu)
 - Jestli používáte **Internal Database URL** (ne External)
+- V Render logs uvidíte zprávu "✅ Databáze připravena" pokud je vše v pořádku
+- Pokud vidíte "⚠️ Varování: DATABASE_URL není nastaveno", přidejte environment variable
+
+## ⚠️ Důležité:
+
+**Bez databáze se data při každém redeploy smažou!** 
+
+Pokud nemáte nastavenou `DATABASE_URL`, aplikace sice funguje, ale:
+- Data se ukládají do souborů `crypto_config.json` a `crypto_price_state.json`
+- Při redeploy na Render.com se tyto soubory smažou
+- Všechna nastavení uživatelů (sledované kryptoměny, thresholdy) se ztratí
+
+**Řešení:** Nastavte PostgreSQL databázi podle návodu výše.
 

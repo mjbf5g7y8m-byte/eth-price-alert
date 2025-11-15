@@ -10,6 +10,7 @@ import time
 import requests
 import asyncio
 import psycopg2
+from psycopg2 import OperationalError, Error as Psycopg2Error
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
@@ -45,8 +46,12 @@ def get_db_connection():
     if not DATABASE_URL:
         return None
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        # Zkusíme připojit s timeoutem
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require', connect_timeout=10)
         return conn
+    except OperationalError as e:
+        print(f"⚠️  Chyba při připojení k databázi (operational): {e}")
+        return None
     except Exception as e:
         print(f"⚠️  Chyba při připojení k databázi: {e}")
         return None
@@ -56,6 +61,7 @@ def init_database():
     """Inicializuje databázové tabulky."""
     conn = get_db_connection()
     if not conn:
+        print("❌ Nelze se připojit k databázi. Zkontrolujte DATABASE_URL.")
         return False
     
     try:
@@ -81,8 +87,13 @@ def init_database():
         conn.commit()
         cur.close()
         conn.close()
-        print("✅ Databáze inicializována")
+        print("✅ Databázové tabulky vytvořeny/zkontrolovány")
         return True
+    except Psycopg2Error as e:
+        print(f"❌ Chyba při inicializaci databáze (PostgreSQL): {e}")
+        if conn:
+            conn.close()
+        return False
     except Exception as e:
         print(f"❌ Chyba při inicializaci databáze: {e}")
         if conn:
@@ -806,7 +817,20 @@ def main():
     print("🔍 Debug - Kontrola environment variables:")
     print(f"   TELEGRAM_BOT_TOKEN: {'✅ Nastaveno' if TELEGRAM_BOT_TOKEN else '❌ Chybí'}")
     print(f"   TELEGRAM_CHAT_ID: {'✅ Nastaveno' if TELEGRAM_CHAT_ID else '⚠️  Volitelné (bot odpovídá všem)'}")
+    print(f"   DATABASE_URL: {'✅ Nastaveno - data budou uložena v databázi' if DATABASE_URL else '⚠️  Není nastaveno - data budou uložena lokálně (při redeploy se smažou!)'}")
     print()
+    
+    # Inicializace databáze (pokud je DATABASE_URL nastaven)
+    if DATABASE_URL:
+        print("🗄️  Inicializace databáze...")
+        if init_database():
+            print("✅ Databáze připravena - data budou persistentní a přežijí redeploy\n")
+        else:
+            print("⚠️  Varování: Databáze se nepodařilo inicializovat. Data budou uložena lokálně.\n")
+    else:
+        print("⚠️  Varování: DATABASE_URL není nastaveno!")
+        print("   Data budou uložena do souborů, které se při redeploy na Render.com smažou.")
+        print("   Pro persistentní uložení nastavte DATABASE_URL (viz DATABASE_SETUP.md)\n")
     
     # Vytvoření aplikace
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
