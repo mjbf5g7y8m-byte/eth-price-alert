@@ -481,14 +481,21 @@ async def list_cryptos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threshold = crypto_config.get('threshold', 0.05) * 100  # 5% default
         last_price = state.get(symbol, {}).get('last_notification_price')
         
+        # Pokud nemáme uloženou cenu, zkusíme získat aktuální cenu
         if last_price:
-            message += f"• <b>{name} ({symbol})</b>\n"
-            message += f"  Threshold: {threshold:.2f}%\n"
-            message += f"  Poslední cena: ${last_price:,.2f}\n\n"
+            current_price = last_price
+            price_status = f"Poslední cena: ${current_price:,.2f}"
         else:
-            message += f"• <b>{name} ({symbol})</b>\n"
-            message += f"  Threshold: {threshold:.2f}%\n"
-            message += f"  Status: Čeká na první kontrolu\n\n"
+            # Zkusíme získat aktuální cenu pro zobrazení
+            current_price = get_crypto_price(symbol)
+            if current_price is not None:
+                price_status = f"Aktuální cena: ${current_price:,.2f} (první kontrola)"
+            else:
+                price_status = "⏳ Čeká na první kontrolu (chyba při získávání ceny)"
+        
+        message += f"• <b>{name} ({symbol})</b>\n"
+        message += f"  Threshold: {threshold:.2f}%\n"
+        message += f"  {price_status}\n\n"
     
     await update.message.reply_text(message, parse_mode='HTML')
 
@@ -772,7 +779,9 @@ async def price_check_loop(application: Application, stop_event: asyncio.Event):
                 current_price = get_crypto_price(symbol)
                 
                 if current_price is None:
-                    print(f"⏳ [{timestamp}] {symbol}: Chyba při získávání ceny")
+                    print(f"⏳ [{timestamp}] {symbol}: Chyba při získávání ceny - zkusím znovu při příští kontrole")
+                    # Pokračujeme s další kryptoměnou, ale neukončíme smyčku
+                    await asyncio.sleep(1)
                     continue
                 
                 # Zajištění, že stav existuje
