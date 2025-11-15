@@ -248,37 +248,72 @@ def save_config(config):
         print(f"⚠️  Chyba při ukládání do souboru: {e}")
 
 
-def get_crypto_price(symbol, max_retries=3):
+def get_crypto_price(symbol, max_retries=2):
     """Získá aktuální cenu kryptoměny z CryptoCompare API s retry logikou."""
-    for attempt in range(max_retries):
-        try:
-            url = f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}'
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if 'USD' in data:
-                return float(data['USD'])
-            elif 'Response' in data and data['Response'] == 'Error':
-                error_msg = data.get('Message', 'Unknown error')
-                if attempt == max_retries - 1:
-                    print(f"⚠️  API Error pro {symbol}: {error_msg}")
-                return None
-            else:
-                return None
-        except requests.Timeout:
-            if attempt == max_retries - 1:
-                print(f"⚠️  Timeout při získávání ceny pro {symbol} (pokus {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(1)  # Krátká pauza před dalším pokusem
-        except requests.RequestException as e:
-            if attempt == max_retries - 1:
-                print(f"⚠️  Chyba při získávání ceny pro {symbol}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(1)
-        except (KeyError, ValueError) as e:
-            if attempt == max_retries - 1:
-                print(f"⚠️  Chyba při parsování odpovědi pro {symbol}: {e}")
-            return None
+    # Zkusíme bez API key nejdřív (free tier)
+    urls = [
+        f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD',
+        f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}'
+    ]
+    
+    for url_index, url in enumerate(urls):
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Debug: vypíšeme odpověď pro první pokus prvního URL
+                if url_index == 0 and attempt == 0:
+                    print(f"🔍 [{symbol}] API Response: {data}")
+                
+                if 'USD' in data:
+                    price = float(data['USD'])
+                    if url_index == 0 and attempt == 0:
+                        print(f"✅ [{symbol}] Cena získána: ${price:,.2f}")
+                    return price
+                elif 'Response' in data and data['Response'] == 'Error':
+                    error_msg = data.get('Message', 'Unknown error')
+                    if url_index == len(urls) - 1 and attempt == max_retries - 1:
+                        print(f"❌ API Error pro {symbol}: {error_msg}")
+                    # Zkusíme další URL
+                    break
+                else:
+                    if url_index == len(urls) - 1 and attempt == max_retries - 1:
+                        print(f"⚠️  Neočekávaná odpověď pro {symbol}: {data}")
+                    # Zkusíme další URL
+                    break
+            except requests.Timeout:
+                if url_index == len(urls) - 1 and attempt == max_retries - 1:
+                    print(f"⏱️  Timeout při získávání ceny pro {symbol}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                continue
+            except requests.HTTPError as e:
+                if url_index == len(urls) - 1 and attempt == max_retries - 1:
+                    print(f"❌ HTTP Error pro {symbol}: Status {response.status_code}")
+                    print(f"   Response: {response.text[:200]}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                continue
+            except requests.RequestException as e:
+                if url_index == len(urls) - 1 and attempt == max_retries - 1:
+                    print(f"❌ Request Exception pro {symbol}: {type(e).__name__}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                continue
+            except (KeyError, ValueError) as e:
+                if url_index == len(urls) - 1 and attempt == max_retries - 1:
+                    print(f"❌ Parsing Error pro {symbol}: {e}")
+                # Zkusíme další URL
+                break
+            except Exception as e:
+                if url_index == len(urls) - 1 and attempt == max_retries - 1:
+                    print(f"❌ Nečekaná chyba pro {symbol}: {type(e).__name__}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                continue
+    
     return None
 
 
