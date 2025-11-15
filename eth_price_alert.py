@@ -250,11 +250,13 @@ def save_config(config):
 
 def get_crypto_price(symbol, max_retries=2):
     """Získá aktuální cenu kryptoměny z CryptoCompare API s retry logikou."""
-    # Zkusíme bez API key nejdřív (free tier)
+    # Zkusíme bez API key nejdřív (free tier) - API key je přes rate limit
     urls = [
         f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD',
-        f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}'
     ]
+    
+    # Přidáme API key URL jen pokud není přes limit (ale aktuálně je, takže ho přeskočíme)
+    # urls.append(f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD&api_key={CRYPTOCOMPARE_API_KEY}')
     
     for url_index, url in enumerate(urls):
         for attempt in range(max_retries):
@@ -263,21 +265,30 @@ def get_crypto_price(symbol, max_retries=2):
                 response.raise_for_status()
                 data = response.json()
                 
-                # Debug: vypíšeme odpověď pro první pokus prvního URL
-                if url_index == 0 and attempt == 0:
+                # Debug: vypíšeme odpověď pro první pokus
+                if attempt == 0:
                     print(f"🔍 [{symbol}] API Response: {data}")
                 
                 if 'USD' in data:
                     price = float(data['USD'])
-                    if url_index == 0 and attempt == 0:
+                    if attempt == 0:
                         print(f"✅ [{symbol}] Cena získána: ${price:,.2f}")
                     return price
                 elif 'Response' in data and data['Response'] == 'Error':
                     error_msg = data.get('Message', 'Unknown error')
-                    if url_index == len(urls) - 1 and attempt == max_retries - 1:
-                        print(f"❌ API Error pro {symbol}: {error_msg}")
-                    # Zkusíme další URL
-                    break
+                    # Pokud je to rate limit error, zkusíme bez API key (což už děláme)
+                    if 'rate limit' in error_msg.lower():
+                        print(f"⚠️  [{symbol}] Rate limit - používám free tier")
+                        # Už používáme free tier, takže jen logujeme
+                        if attempt == max_retries - 1:
+                            print(f"❌ API Error pro {symbol}: {error_msg}")
+                    else:
+                        if attempt == max_retries - 1:
+                            print(f"❌ API Error pro {symbol}: {error_msg}")
+                    # Zkusíme další pokus
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                    continue
                 else:
                     if url_index == len(urls) - 1 and attempt == max_retries - 1:
                         print(f"⚠️  Neočekávaná odpověď pro {symbol}: {data}")
