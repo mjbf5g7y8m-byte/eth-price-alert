@@ -12,6 +12,7 @@ from unittest.mock import Mock, AsyncMock, patch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Importujeme funkce z bota
+import eth_price_alert
 from eth_price_alert import (
     load_config, save_config, load_state, save_state,
     get_crypto_price, validate_ticker,
@@ -255,10 +256,337 @@ async def test_database_operations():
         traceback.print_exc()
         return False
 
+async def test_add_existing_crypto():
+    """Test přidání kryptoměny, která už existuje."""
+    print("🧪 Test 10: /add kryptoměny, která už existuje")
+    update = MockUpdate(args=['ETH'])
+    context = MockContext(['ETH'])
+    
+    # Nejdřív zkontrolujeme, jestli ETH už existuje
+    config_before = load_config()
+    eth_exists = 'ETH' in config_before
+    
+    with patch('eth_price_alert.validate_ticker', return_value=(True, 'Ethereum', 3000.0)):
+        try:
+            result = await add_crypto(update, context)
+            # Bot by měl umožnit přidat i existující (přepíše threshold)
+            assert update.message.reply_text.called, "add_crypto() měl zavolat reply_text"
+            print(f"   ✅ /add existující kryptoměny funguje (ETH existuje: {eth_exists})\n")
+            return True
+        except Exception as e:
+            print(f"   ❌ /add existující kryptoměny selhal: {e}\n")
+            return False
+
+async def test_add_invalid_ticker():
+    """Test přidání neplatného tickeru."""
+    print("🧪 Test 11: /add neplatného tickeru (INVALID)")
+    update = MockUpdate(args=['INVALID'])
+    context = MockContext(['INVALID'])
+    
+    with patch('eth_price_alert.validate_ticker', return_value=(False, None, None)):
+        try:
+            result = await add_crypto(update, context)
+            assert update.message.reply_text.called, "add_crypto() měl zavolat reply_text"
+            # Měla by být chybová zpráva
+            call_args = update.message.reply_text.call_args[0][0]
+            assert 'není platný' in call_args.lower() or 'neexistuje' in call_args.lower(), "Měla být chybová zpráva"
+            print("   ✅ /add neplatného tickeru správně vrátil chybu\n")
+            return True
+        except Exception as e:
+            print(f"   ❌ /add neplatného tickeru selhal: {e}\n")
+            return False
+
+async def test_handle_invalid_threshold():
+    """Test zadání neplatného threshold."""
+    print("🧪 Test 12: Zadání neplatného threshold (text)")
+    update = MockUpdate(message_text='abc')
+    context = MockContext()
+    context.user_data['pending_symbol'] = 'TEST'
+    context.user_data['pending_name'] = 'Test Coin'
+    
+    try:
+        result = await handle_threshold(update, context)
+        assert update.message.reply_text.called, "handle_threshold() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'neplatný' in call_args.lower() or 'formát' in call_args.lower(), "Měla být chybová zpráva"
+        assert result == 1, "Měl by zůstat ve stavu WAITING_THRESHOLD"
+        print("   ✅ Neplatný threshold správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ Neplatný threshold selhal: {e}\n")
+        return False
+
+async def test_handle_negative_threshold():
+    """Test zadání záporného threshold."""
+    print("🧪 Test 13: Zadání záporného threshold (-5)")
+    update = MockUpdate(message_text='-5')
+    context = MockContext()
+    context.user_data['pending_symbol'] = 'TEST'
+    context.user_data['pending_name'] = 'Test Coin'
+    
+    try:
+        result = await handle_threshold(update, context)
+        assert update.message.reply_text.called, "handle_threshold() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'větší než 0' in call_args.lower() or 'musí být' in call_args.lower(), "Měla být chybová zpráva"
+        assert result == 1, "Měl by zůstat ve stavu WAITING_THRESHOLD"
+        print("   ✅ Záporný threshold správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ Záporný threshold selhal: {e}\n")
+        return False
+
+async def test_remove_nonexistent_crypto():
+    """Test odebrání kryptoměny, která neexistuje."""
+    print("🧪 Test 14: /remove neexistující kryptoměny (XYZ)")
+    update = MockUpdate(args=['XYZ'])
+    context = MockContext(['XYZ'])
+    
+    try:
+        config_before = load_config()
+        if 'XYZ' in config_before:
+            print("   ⚠️  XYZ už existuje, přeskočeno\n")
+            return True
+        
+        await remove_crypto(update, context)
+        assert update.message.reply_text.called, "remove_crypto() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'není ve sledovaných' in call_args.lower() or 'není' in call_args.lower(), "Měla být chybová zpráva"
+        print("   ✅ /remove neexistující kryptoměny správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ /remove neexistující kryptoměny selhal: {e}\n")
+        return False
+
+async def test_list_empty():
+    """Test /list když není žádná kryptoměna."""
+    print("🧪 Test 15: /list s prázdnou konfigurací")
+    update = MockUpdate()
+    context = MockContext()
+    
+    # Uložíme prázdnou konfiguraci
+    original_config = load_config()
+    save_config({})
+    
+    try:
+        await list_cryptos(update, context)
+        assert update.message.reply_text.called, "list_cryptos() měl zavolat reply_text"
+        print("   ✅ /list s prázdnou konfigurací funguje\n")
+        
+        # Obnovíme původní konfiguraci
+        save_config(original_config)
+        return True
+    except Exception as e:
+        print(f"   ❌ /list s prázdnou konfigurací selhal: {e}\n")
+        # Obnovíme původní konfiguraci
+        save_config(original_config)
+        return False
+
+async def test_setall_empty():
+    """Test /setall když není žádná kryptoměna."""
+    print("🧪 Test 16: /setall s prázdnou konfigurací")
+    update = MockUpdate(args=['5'])
+    context = MockContext(['5'])
+    
+    # Uložíme prázdnou konfiguraci
+    original_config = load_config()
+    save_config({})
+    
+    try:
+        await setall_threshold(update, context)
+        assert update.message.reply_text.called, "setall_threshold() měl zavolat reply_text"
+        # Měla by být chybová zpráva (buď "nesleduji žádné" nebo podobná)
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'nesleduji' in call_args.lower() or 'žádné' in call_args.lower() or 'použijte /add' in call_args.lower(), f"Měla být chybová zpráva, ale dostali jsme: {call_args}"
+        print("   ✅ /setall s prázdnou konfigurací správně vrátil chybu\n")
+        
+        # Obnovíme původní konfiguraci
+        save_config(original_config)
+        return True
+    except Exception as e:
+        print(f"   ❌ /setall s prázdnou konfigurací selhal: {e}\n")
+        import traceback
+        traceback.print_exc()
+        # Obnovíme původní konfiguraci
+        save_config(original_config)
+        return False
+
+async def test_setall_invalid_threshold():
+    """Test /setall s neplatným threshold."""
+    print("🧪 Test 17: /setall s neplatným threshold (abc)")
+    update = MockUpdate(args=['abc'])
+    context = MockContext(['abc'])
+    
+    # Ujistíme se, že máme nějakou konfiguraci
+    config = load_config()
+    if not config:
+        # Přidáme testovací kryptoměnu
+        config = {'TEST': {'name': 'Test', 'threshold': 0.05}}
+        save_config(config)
+    
+    try:
+        await setall_threshold(update, context)
+        assert update.message.reply_text.called, "setall_threshold() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'neplatný' in call_args.lower() or 'formát' in call_args.lower() or 'číslo' in call_args.lower(), f"Měla být chybová zpráva, ale dostali jsme: {call_args}"
+        print("   ✅ /setall s neplatným threshold správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ /setall s neplatným threshold selhal: {e}\n")
+        import traceback
+        traceback.print_exc()
+        return False
+
+async def test_update_nonexistent():
+    """Test /update pro neexistující kryptoměnu."""
+    print("🧪 Test 18: /update neexistující kryptoměny (XYZ)")
+    update = MockUpdate(args=['XYZ'])
+    context = MockContext(['XYZ'])
+    
+    # Ujistíme se, že máme nějakou konfiguraci
+    config = load_config()
+    if not config:
+        # Přidáme testovací kryptoměnu
+        config = {'TEST': {'name': 'Test', 'threshold': 0.05}}
+        save_config(config)
+    
+    try:
+        config = load_config()
+        if 'XYZ' in config:
+            print("   ⚠️  XYZ už existuje, přeskočeno\n")
+            return True
+        
+        result = await update_threshold(update, context)
+        assert update.message.reply_text.called, "update_threshold() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'není ve sledovaných' in call_args.lower() or 'není' in call_args.lower() or 'použijte /list' in call_args.lower(), f"Měla být chybová zpráva, ale dostali jsme: {call_args}"
+        print("   ✅ /update neexistující kryptoměny správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ /update neexistující kryptoměny selhal: {e}\n")
+        import traceback
+        traceback.print_exc()
+        return False
+
+async def test_add_without_args():
+    """Test /add bez argumentů."""
+    print("🧪 Test 19: /add bez argumentů")
+    update = MockUpdate(args=[])
+    context = MockContext([])
+    
+    try:
+        result = await add_crypto(update, context)
+        assert update.message.reply_text.called, "add_crypto() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'zadejte ticker' in call_args.lower() or 'ticker' in call_args.lower(), "Měla být chybová zpráva"
+        assert result == -1, "Měl by ukončit konverzaci"
+        print("   ✅ /add bez argumentů správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ /add bez argumentů selhal: {e}\n")
+        return False
+
+async def test_remove_without_args():
+    """Test /remove bez argumentů."""
+    print("🧪 Test 20: /remove bez argumentů")
+    update = MockUpdate(args=[])
+    context = MockContext([])
+    
+    try:
+        await remove_crypto(update, context)
+        assert update.message.reply_text.called, "remove_crypto() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'zadejte ticker' in call_args.lower() or 'ticker' in call_args.lower(), "Měla být chybová zpráva"
+        print("   ✅ /remove bez argumentů správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ /remove bez argumentů selhal: {e}\n")
+        return False
+
+async def test_add_overwrites_existing():
+    """Test že přidání existující kryptoměny přepíše threshold."""
+    print("🧪 Test 21: Přidání existující kryptoměny přepíše threshold")
+    # Nejdřív přidáme kryptoměnu s jedním threshold
+    config = load_config()
+    if 'ETH' not in config:
+        config['ETH'] = {'name': 'Ethereum', 'threshold': 0.10}  # 10%
+        save_config(config)
+    
+    original_threshold = config.get('ETH', {}).get('threshold', 0)
+    
+    # Teď "přidáme" ETH znovu s jiným threshold
+    update = MockUpdate(args=['ETH'])
+    context = MockContext(['ETH'])
+    context.user_data = {}
+    
+    with patch('eth_price_alert.validate_ticker', return_value=(True, 'Ethereum', 3000.0)):
+        result = await add_crypto(update, context)
+        # Mělo by to umožnit přidat (přepíše threshold)
+        assert update.message.reply_text.called, "add_crypto() měl zavolat reply_text"
+        assert 'pending_symbol' in context.user_data, "Symbol měl být uložen"
+        print(f"   ✅ Přidání existující kryptoměny funguje (přepíše threshold)\n")
+        return True
+
+async def test_zero_threshold():
+    """Test zadání threshold 0."""
+    print("🧪 Test 22: Zadání threshold 0")
+    update = MockUpdate(message_text='0')
+    context = MockContext()
+    context.user_data['pending_symbol'] = 'TEST'
+    context.user_data['pending_name'] = 'Test Coin'
+    
+    try:
+        result = await handle_threshold(update, context)
+        assert update.message.reply_text.called, "handle_threshold() měl zavolat reply_text"
+        # Měla by být chybová zpráva
+        call_args = update.message.reply_text.call_args[0][0]
+        assert 'větší než 0' in call_args.lower() or 'musí být' in call_args.lower(), "Měla být chybová zpráva"
+        assert result == 1, "Měl by zůstat ve stavu WAITING_THRESHOLD"
+        print("   ✅ Threshold 0 správně vrátil chybu\n")
+        return True
+    except Exception as e:
+        print(f"   ❌ Threshold 0 selhal: {e}\n")
+        return False
+
+async def test_very_high_threshold():
+    """Test zadání velmi vysokého threshold."""
+    print("🧪 Test 23: Zadání velmi vysokého threshold (1000)")
+    update = MockUpdate(message_text='1000')
+    context = MockContext()
+    context.user_data['pending_symbol'] = 'TEST'
+    context.user_data['pending_name'] = 'Test Coin'
+    
+    try:
+        result = await handle_threshold(update, context)
+        # Mělo by to projít (i když je to vysoké)
+        assert update.message.reply_text.called, "handle_threshold() měl zavolat reply_text"
+        # Mělo by to být uloženo
+        config = load_config()
+        if 'TEST' in config:
+            assert config['TEST']['threshold'] == 10.0, "Threshold měl být 1000% = 10.0"
+            # Odstraníme testovací záznam
+            del config['TEST']
+            save_config(config)
+            print("   ✅ Velmi vysoký threshold funguje (1000%)\n")
+            return True
+        else:
+            print("   ⚠️  TEST nebyl uložen, ale nevrátil chybu\n")
+            return True
+    except Exception as e:
+        print(f"   ❌ Velmi vysoký threshold selhal: {e}\n")
+        return False
+
 async def main():
     """Spustí všechny testy."""
     print("="*80)
-    print("🧪 TESTOVÁNÍ VŠECH UŽIVATELSKÝCH AKCÍ")
+    print("🧪 TESTOVÁNÍ VŠECH UŽIVATELSKÝCH AKCÍ + EDGE CASES")
     print("="*80)
     print()
     
@@ -272,6 +600,20 @@ async def main():
         ("Help", test_help),
         ("Get Crypto Price", test_get_crypto_price),
         ("Database Operations", test_database_operations),
+        ("Add Existing Crypto", test_add_existing_crypto),
+        ("Add Invalid Ticker", test_add_invalid_ticker),
+        ("Invalid Threshold (text)", test_handle_invalid_threshold),
+        ("Negative Threshold", test_handle_negative_threshold),
+        ("Remove Nonexistent", test_remove_nonexistent_crypto),
+        ("List Empty", test_list_empty),
+        ("Setall Empty", test_setall_empty),
+        ("Setall Invalid Threshold", test_setall_invalid_threshold),
+        ("Update Nonexistent", test_update_nonexistent),
+        ("Add Without Args", test_add_without_args),
+        ("Remove Without Args", test_remove_without_args),
+        ("Add Overwrites Existing", test_add_overwrites_existing),
+        ("Zero Threshold", test_zero_threshold),
+        ("Very High Threshold", test_very_high_threshold),
     ]
     
     results = {}

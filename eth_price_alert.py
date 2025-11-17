@@ -170,7 +170,7 @@ def save_state(state):
         print(f"⚠️  Chyba při ukládání stavu do souboru: {e}")
 
 
-def load_config():
+def load_config(use_default=True):
     """Načte konfiguraci uživatele (sledované kryptoměny a thresholdy)."""
     # Zkusíme načíst z databáze
     conn = get_db_connection()
@@ -179,13 +179,13 @@ def load_config():
             cur = conn.cursor()
             cur.execute("SELECT data FROM crypto_config ORDER BY id DESC LIMIT 1")
             row = cur.fetchone()
-            if row:
+            if row and row[0] is not None:
                 config = row[0]
-                if config:
-                    print(f"📋 Načtena konfigurace z databáze: {len(config)} kryptoměn")
-                    cur.close()
-                    conn.close()
-                    return config
+                # I prázdný dict je validní - pokud je uložen, použijeme ho
+                print(f"📋 Načtena konfigurace z databáze: {len(config)} kryptoměn")
+                cur.close()
+                conn.close()
+                return config
             cur.close()
             conn.close()
         except Exception as e:
@@ -198,24 +198,28 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
-                if config:
+                # I prázdný dict je validní - pokud existuje soubor, použijeme ho
+                if config is not None:
                     print(f"📋 Načtena konfigurace ze souboru: {len(config)} kryptoměn")
                     return config
         except (json.JSONDecodeError, IOError):
             pass
     
-    # Výchozí konfigurace (pouze pokud není žádná existující)
-    # Pokud uživatel nic nenastavil, použijeme výchozí kryptoměny s 5% threshold
-    config = {}
-    for symbol, name in DEFAULT_CRYPTOS:
-        config[symbol] = {
-            'name': name,
-            'threshold': 0.05  # 5% default
-        }
-    if config:
-        save_config(config)
-        print(f"📋 Používá se výchozí konfigurace: {len(config)} kryptoměn s 5% threshold")
+    # Výchozí konfigurace (pouze pokud není žádná existující a use_default=True)
+    if use_default:
+        config = {}
+        for symbol, name in DEFAULT_CRYPTOS:
+            config[symbol] = {
+                'name': name,
+                'threshold': 0.05  # 5% default
+            }
+        if config:
+            save_config(config)
+            print(f"📋 Používá se výchozí konfigurace: {len(config)} kryptoměn s 5% threshold")
+        else:
+            print("📋 Používá se prázdná konfigurace (žádné kryptoměny nejsou nastavené)")
     else:
+        config = {}
         print("📋 Používá se prázdná konfigurace (žádné kryptoměny nejsou nastavené)")
     return config
 
