@@ -234,9 +234,28 @@ def save_config(config):
             cur.close()
             conn.close()
             print(f"💾 Konfigurace uložena do databáze: {len(config)} kryptoměn")
+            # Ověříme, že se to skutečně uložilo
+            verify_conn = get_db_connection()
+            if verify_conn:
+                try:
+                    verify_cur = verify_conn.cursor()
+                    verify_cur.execute("SELECT data FROM crypto_config ORDER BY id DESC LIMIT 1")
+                    row = verify_cur.fetchone()
+                    if row:
+                        saved_config = row[0]
+                        if len(saved_config) == len(config):
+                            print(f"✅ Ověření: Konfigurace správně uložena ({len(saved_config)} kryptoměn)")
+                        else:
+                            print(f"⚠️  Varování: Počet kryptoměn se neshoduje (uloženo: {len(saved_config)}, očekáváno: {len(config)})")
+                    verify_cur.close()
+                    verify_conn.close()
+                except Exception as e:
+                    print(f"⚠️  Chyba při ověřování uložení: {e}")
             return
         except Exception as e:
             print(f"⚠️  Chyba při ukládání konfigurace do databáze: {e}")
+            import traceback
+            traceback.print_exc()
             if conn:
                 conn.close()
     
