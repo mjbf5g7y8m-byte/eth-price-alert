@@ -172,7 +172,7 @@ def save_state(state):
 
 def load_config(use_default=True):
     """Načte konfiguraci uživatele (sledované kryptoměny a thresholdy)."""
-    # Zkusíme načíst z databáze
+    # Zkusíme načíst z databáze (priorita)
     conn = get_db_connection()
     if conn:
         try:
@@ -193,7 +193,7 @@ def load_config(use_default=True):
             if conn:
                 conn.close()
     
-    # Fallback na soubor (pro lokální vývoj)
+    # Fallback na soubor (pouze pokud není databáze)
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
@@ -238,6 +238,7 @@ def save_config(config):
             cur.close()
             conn.close()
             print(f"💾 Konfigurace uložena do databáze: {len(config)} kryptoměn")
+            
             # Ověříme, že se to skutečně uložilo
             verify_conn = get_db_connection()
             if verify_conn:
@@ -255,6 +256,14 @@ def save_config(config):
                     verify_conn.close()
                 except Exception as e:
                     print(f"⚠️  Chyba při ověřování uložení: {e}")
+            
+            # Pokud máme databázi, smažeme soubor, aby se vždy načítalo z databáze
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    os.remove(CONFIG_FILE)
+                    print(f"🗑️  Odstraněn lokální soubor (používáme databázi)")
+                except:
+                    pass
             return
         except Exception as e:
             print(f"⚠️  Chyba při ukládání konfigurace do databáze: {e}")
@@ -562,7 +571,11 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_state(state)
         print(f"💾 Uloženo do stavu: {symbol}")
         
-        # Ověříme, že se to skutečně uložilo
+        # Ověříme, že se to skutečně uložilo - načteme znovu z databáze
+        # Použijeme malou pauzu, aby se databáze stihla aktualizovat
+        import time
+        time.sleep(0.1)  # Krátká pauza pro aktualizaci databáze
+        
         verify_config = load_config()
         if symbol in verify_config:
             print(f"✅ Ověření: {symbol} je v konfiguraci: {verify_config[symbol]}")
@@ -570,6 +583,23 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             print(f"❌ CHYBA: {symbol} NENÍ v konfiguraci po uložení!")
             print(f"📋 Dostupné kryptoměny: {list(verify_config.keys())}")
+            # Zkusíme znovu načíst přímo z databáze
+            conn = get_db_connection()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT data FROM crypto_config ORDER BY id DESC LIMIT 1")
+                    row = cur.fetchone()
+                    if row:
+                        db_config = row[0]
+                        if symbol in db_config:
+                            print(f"✅ {symbol} JE v databázi, ale load_config ho nenačetl!")
+                        else:
+                            print(f"❌ {symbol} NENÍ ani v databázi!")
+                    cur.close()
+                    conn.close()
+                except Exception as e:
+                    print(f"⚠️  Chyba při kontrole databáze: {e}")
         
         await update.message.reply_text(
             f"✅ <b>{name} ({symbol})</b> přidáno ke sledování!\n\n"
