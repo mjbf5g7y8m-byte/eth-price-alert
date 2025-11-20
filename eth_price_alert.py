@@ -338,42 +338,38 @@ def validate_ticker(symbol):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 <b>CryptoWatch Pro</b>\n\n"
-        "Profesionální sledování cen kryptoměn a akcií s automatickými upozorněními.\n\n"
-        "📊 <b>Hlavní funkce:</b>\n"
-        "• Sledování kryptoměn (BTC, ETH, atd.)\n"
-        "• Sledování akcií (AAPL, TSLA, atd.)\n"
-        "• Přizpůsobitelné prahové hodnoty\n"
-        "• Okamžitá notifikace při změně ceny\n"
-        "• Více uživatelů - každý má vlastní nastavení\n\n"
+        "Automatické upozornění na významné změny cen kryptoměn a akcií.\n\n"
+        "⚡ <b>Jak to funguje:</b>\n"
+        "Nastavíte si prahovou hodnotu (např. 5%). Bot vás upozorní <b>pouze když</b> cena překročí tento limit <b>nahoru nebo dolů</b>.\n\n"
+        "✅ <b>Výhody:</b>\n"
+        "• Nemusíte sledovat denní/měsíční změny\n"
+        "• Dostanete upozornění jen na reálné významné pohyby\n"
+        "• Mnohem efektivnější než neustálé sledování\n\n"
+        "📊 <b>Podporuje:</b> Kryptoměny (BTC, ETH) a akcie (AAPL, TSLA)\n\n"
         "⚡ <b>Rychlý start:</b>\n"
         "/add BTC - Přidat kryptoměnu\n"
         "/add AAPL - Přidat akcii\n"
         "/list - Zobrazit sledované\n"
-        "/update - Změnit prahovou hodnotu\n"
-        "/help - Více informací\n\n"
-        "💡 <i>Nastavte si vlastní alerty a nikdy nepromeškejte důležité pohyby cen!</i>",
-            parse_mode='HTML'
-        )
+        "/help - Více informací",
+        parse_mode='HTML'
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 <b>CryptoWatch Pro - Nápověda</b>\n\n"
+        "⚡ <b>Jak to funguje:</b>\n"
+        "Bot kontroluje ceny každou minutu. <b>Upozornění dostanete pouze když</b> cena překročí váš nastavený práh <b>nahoru nebo dolů</b>.\n\n"
+        "✅ <b>Výhoda:</b> Nemusíte sledovat denní/měsíční změny - dostanete upozornění jen na reálné významné pohyby. Mnohem efektivnější!\n\n"
         "🔹 <b>Příkazy:</b>\n\n"
-        "<b>/start</b> - Úvodní zpráva\n"
         "<b>/add TICKER</b> - Přidat kryptoměnu nebo akcii\n"
-        "   Kryptoměny: /add BTC, /add ETH, /add LTC\n"
-        "   Akcie: /add AAPL, /add TSLA, /add MSFT\n"
+        "   /add BTC, /add AAPL\n"
         "   Bot se zeptá na prahovou hodnotu (např. 5 pro 5%)\n\n"
-        "<b>/list</b> - Zobrazit všechny sledované symboly\n\n"
-        "<b>/update [TICKER]</b> - Změnit prahovou hodnotu\n"
-        "   Příklad: /update BTC nebo jen /update (vybere z menu)\n\n"
-        "<b>/setall %</b> - Nastavit stejnou prahovou hodnotu pro všechny\n"
-        "   Příklad: /setall 5 (nastaví 5% pro všechny)\n\n"
-        "<b>/remove TICKER</b> - Odebrat symbol ze sledování\n"
-        "   Příklad: /remove BTC nebo /remove AAPL\n\n"
-        "<b>/help</b> - Zobrazit tuto nápovědu\n\n"
-        "💡 <b>Tip:</b> Bot kontroluje ceny každou minutu a pošle upozornění, když cena změní o nastavené procento.\n\n"
-        "📈 <b>Podporované:</b> Kryptoměny (BTC, ETH, atd.) a akcie (AAPL, TSLA, atd.)",
+        "<b>/list</b> - Zobrazit všechny sledované\n\n"
+        "<b>/update [TICKER]</b> - Změnit prahovou hodnotu\n\n"
+        "<b>/setall %</b> - Nastavit stejnou hodnotu pro všechny\n"
+        "   Příklad: /setall 5\n\n"
+        "<b>/remove TICKER</b> - Odebrat ze sledování\n\n"
+        "<b>/help</b> - Tato nápověda",
         parse_mode='HTML'
     )
 
