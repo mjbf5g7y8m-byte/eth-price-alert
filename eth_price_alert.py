@@ -217,10 +217,59 @@ def get_crypto_price(symbol):
             continue
     return None
 
-def validate_ticker(symbol):
+def get_stock_price(symbol):
+    """Získá aktuální cenu akcie z Yahoo Finance API."""
+    # Yahoo Finance API endpoint
+    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}'
+    try:
+        response = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        response.raise_for_status()
+        data = response.json()
+        
+        if 'chart' in data and 'result' in data['chart']:
+            result = data['chart']['result']
+            if result and len(result) > 0:
+                if 'meta' in result[0] and 'regularMarketPrice' in result[0]['meta']:
+                    price = result[0]['meta']['regularMarketPrice']
+                    return float(price), 'Yahoo Finance'
+    except:
+        pass
+    return None, None
+
+def get_price(symbol):
+    """Získá cenu kryptoměny nebo akcie - automaticky detekuje typ."""
+    # Nejdřív zkusíme kryptoměnu
     price = get_crypto_price(symbol.upper())
     if price is not None:
-        return True, symbol.upper(), price
+        return price, 'crypto'
+    
+    # Pokud to není kryptoměna, zkusíme akcii
+    price, api_name = get_stock_price(symbol.upper())
+    if price is not None:
+        return price, 'stock'
+    
+    return None, None
+
+def validate_ticker(symbol):
+    """Ověří ticker a vrátí typ (crypto/stock), název a cenu."""
+    price, asset_type = get_price(symbol.upper())
+    if price is not None:
+        # Pro kryptoměny použijeme symbol jako název, pro akcie zkusíme získat název
+        name = symbol.upper()
+        if asset_type == 'stock':
+            # Zkusíme získat název akcie z Yahoo Finance
+            try:
+                url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}'
+                response = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'chart' in data and 'result' in data['chart']:
+                        result = data['chart']['result']
+                        if result and len(result) > 0 and 'meta' in result[0]:
+                            name = result[0]['meta'].get('longName', symbol.upper())
+            except:
+                pass
+        return True, name, price
     return False, None, None
 
 # --- Telegram Handlers ---
@@ -228,14 +277,16 @@ def validate_ticker(symbol):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 <b>CryptoWatch Pro</b>\n\n"
-        "Profesionální sledování cen kryptoměn s automatickými upozorněními.\n\n"
+        "Profesionální sledování cen kryptoměn a akcií s automatickými upozorněními.\n\n"
         "📊 <b>Hlavní funkce:</b>\n"
-        "• Sledování libovolných kryptoměn\n"
+        "• Sledování kryptoměn (BTC, ETH, atd.)\n"
+        "• Sledování akcií (AAPL, TSLA, atd.)\n"
         "• Přizpůsobitelné prahové hodnoty\n"
         "• Okamžitá notifikace při změně ceny\n"
         "• Více uživatelů - každý má vlastní nastavení\n\n"
         "⚡ <b>Rychlý start:</b>\n"
         "/add BTC - Přidat kryptoměnu\n"
+        "/add AAPL - Přidat akcii\n"
         "/list - Zobrazit sledované\n"
         "/update - Změnit prahovou hodnotu\n"
         "/help - Více informací\n\n"
@@ -248,18 +299,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 <b>CryptoWatch Pro - Nápověda</b>\n\n"
         "🔹 <b>Příkazy:</b>\n\n"
         "<b>/start</b> - Úvodní zpráva\n"
-        "<b>/add TICKER</b> - Přidat kryptoměnu ke sledování\n"
-        "   Příklad: /add BTC\n"
+        "<b>/add TICKER</b> - Přidat kryptoměnu nebo akcii\n"
+        "   Kryptoměny: /add BTC, /add ETH, /add LTC\n"
+        "   Akcie: /add AAPL, /add TSLA, /add MSFT\n"
         "   Bot se zeptá na prahovou hodnotu (např. 5 pro 5%)\n\n"
-        "<b>/list</b> - Zobrazit všechny sledované kryptoměny\n\n"
+        "<b>/list</b> - Zobrazit všechny sledované symboly\n\n"
         "<b>/update [TICKER]</b> - Změnit prahovou hodnotu\n"
         "   Příklad: /update BTC nebo jen /update (vybere z menu)\n\n"
         "<b>/setall %</b> - Nastavit stejnou prahovou hodnotu pro všechny\n"
         "   Příklad: /setall 5 (nastaví 5% pro všechny)\n\n"
-        "<b>/remove TICKER</b> - Odebrat kryptoměnu ze sledování\n"
-        "   Příklad: /remove BTC\n\n"
+        "<b>/remove TICKER</b> - Odebrat symbol ze sledování\n"
+        "   Příklad: /remove BTC nebo /remove AAPL\n\n"
         "<b>/help</b> - Zobrazit tuto nápovědu\n\n"
-        "💡 <b>Tip:</b> Bot kontroluje ceny každou minutu a pošle upozornění, když cena změní o nastavené procento.",
+        "💡 <b>Tip:</b> Bot kontroluje ceny každou minutu a pošle upozornění, když cena změní o nastavené procento.\n\n"
+        "📈 <b>Podporované:</b> Kryptoměny (BTC, ETH, atd.) a akcie (AAPL, TSLA, atd.)",
         parse_mode='HTML'
     )
 
@@ -381,7 +434,7 @@ async def update_threshold_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not user_config:
         await update.message.reply_text("Nemáte co upravovat.")
-    return ConversationHandler.END
+        return ConversationHandler.END
 
     # Pokud uživatel zadal /update BTC
     if context.args:
@@ -391,7 +444,7 @@ async def update_threshold_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data['pending_name'] = symbol
             await update.message.reply_text(f"Zadejte nové % pro {symbol}:")
             return WAITING_UPDATE_THRESHOLD
-            
+
     # Jinak tlačítka
     keyboard = [[InlineKeyboardButton(f"{s} ({c['threshold']*100}%)", callback_data=f"upd_{s}")] for s, c in user_config.items()]
     await update.message.reply_text("Vyberte:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -434,24 +487,25 @@ async def price_check_loop(app, stop_event):
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
             
-            # Získáme seznam všech unikátních kryptoměn k dotazu (optimalizace API volání)
+            # Získáme seznam všech unikátních symbolů (kryptoměny + akcie) k dotazu (optimalizace API volání)
             all_symbols = set()
             for user_conf in full_config.values():
                 all_symbols.update(user_conf.keys())
             
             if not all_symbols:
-                print("⚠️  Žádné kryptoměny ke sledování")
+                print("⚠️  Žádné symboly ke sledování")
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
             
-            print(f"📊 Kontroluji {len(all_symbols)} kryptoměn pro {len(full_config)} uživatelů")
+            print(f"📊 Kontroluji {len(all_symbols)} symbolů (kryptoměny + akcie) pro {len(full_config)} uživatelů")
             
             current_prices = {}
             for sym in all_symbols:
-                p = get_crypto_price(sym)
+                p, asset_type = get_price(sym)
                 if p: 
                     current_prices[sym] = p
-                    print(f"✅ [{sym}] ${p:,.2f}")
+                    asset_emoji = "₿" if asset_type == 'crypto' else "📈"
+                    print(f"✅ [{sym}] {asset_emoji} ${p:,.2f}")
                 else:
                     print(f"❌ [{sym}] Nepodařilo se získat cenu")
                 await asyncio.sleep(0.5) # Throttle
