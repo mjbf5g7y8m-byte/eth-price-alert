@@ -219,21 +219,71 @@ def get_crypto_price(symbol):
 
 def get_stock_price(symbol):
     """Získá aktuální cenu akcie z Yahoo Finance API."""
-    # Yahoo Finance API endpoint
-    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}'
+    # Yahoo Finance API - zkusíme více endpointů
+    endpoints = [
+        f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}',
+        f'https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol.upper()}?modules=price',
+    ]
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+    
+    for url in endpoints:
+        try:
+            response = requests.get(url, timeout=10, headers=headers, allow_redirects=True)
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                except:
+                    continue
+    
+                # Zkusíme první endpoint (chart)
+                if 'chart' in data and 'result' in data['chart']:
+                    result = data['chart']['result']
+                    if result and len(result) > 0:
+                        if 'meta' in result[0]:
+                            meta = result[0]['meta']
+                            # Zkusíme různé možné klíče pro cenu
+                            for price_key in ['regularMarketPrice', 'previousClose', 'currentPrice', 'chartPreviousClose']:
+                                if price_key in meta and meta[price_key] is not None:
+                                    price_val = meta[price_key]
+                                    if isinstance(price_val, (int, float)):
+                                        return float(price_val), 'Yahoo Finance'
+                
+                # Zkusíme druhý endpoint (quoteSummary)
+                if 'quoteSummary' in data and 'result' in data['quoteSummary']:
+                    result = data['quoteSummary']['result']
+                    if result and len(result) > 0:
+                        if 'price' in result[0]:
+                            price_obj = result[0]['price']
+                            # Zkusíme různé klíče
+                            for price_key in ['regularMarketPrice', 'currentPrice']:
+                                if price_key in price_obj:
+                                    price_val = price_obj[price_key]
+                                    if isinstance(price_val, dict) and 'raw' in price_val:
+                                        return float(price_val['raw']), 'Yahoo Finance'
+                                    elif isinstance(price_val, (int, float)):
+                                        return float(price_val), 'Yahoo Finance'
+        except Exception as e:
+            continue
+    
+    # Fallback: Zkusíme jednodušší endpoint
     try:
-        response = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-        response.raise_for_status()
-        data = response.json()
-        
-        if 'chart' in data and 'result' in data['chart']:
-            result = data['chart']['result']
-            if result and len(result) > 0:
-                if 'meta' in result[0] and 'regularMarketPrice' in result[0]['meta']:
-                    price = result[0]['meta']['regularMarketPrice']
-                    return float(price), 'Yahoo Finance'
+        url = f'https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbol.upper()}'
+        response = requests.get(url, timeout=10, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if 'quoteResponse' in data and 'result' in data['quoteResponse']:
+                result = data['quoteResponse']['result']
+                if result and len(result) > 0:
+                    if 'regularMarketPrice' in result[0]:
+                        return float(result[0]['regularMarketPrice']), 'Yahoo Finance'
     except:
         pass
+    
     return None, None
 
 def get_price(symbol):
@@ -260,7 +310,8 @@ def validate_ticker(symbol):
             # Zkusíme získat název akcie z Yahoo Finance
             try:
                 url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}'
-                response = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                response = requests.get(url, timeout=5, headers=headers)
                 if response.status_code == 200:
                     data = response.json()
                     if 'chart' in data and 'result' in data['chart']:
