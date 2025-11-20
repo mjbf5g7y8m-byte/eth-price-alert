@@ -227,12 +227,39 @@ def validate_ticker(symbol):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 <b>Crypto Price Alert Bot</b>\n"
-        "Nyní podporuje více uživatelů! Každý si nastavuje vlastní alerty.\n\n"
-        "/add TICKER - Přidat sledování (např. /add BTC)\n"
-        "/list - Moje kryptoměny\n"
-        "/remove TICKER - Smazat\n"
-        "/setall % - Nastavit všem stejné %\n",
+        "🚀 <b>CryptoWatch Pro</b>\n\n"
+        "Profesionální sledování cen kryptoměn s automatickými upozorněními.\n\n"
+        "📊 <b>Hlavní funkce:</b>\n"
+        "• Sledování libovolných kryptoměn\n"
+        "• Přizpůsobitelné prahové hodnoty\n"
+        "• Okamžitá notifikace při změně ceny\n"
+        "• Více uživatelů - každý má vlastní nastavení\n\n"
+        "⚡ <b>Rychlý start:</b>\n"
+        "/add BTC - Přidat kryptoměnu\n"
+        "/list - Zobrazit sledované\n"
+        "/update - Změnit prahovou hodnotu\n"
+        "/help - Více informací\n\n"
+        "💡 <i>Nastavte si vlastní alerty a nikdy nepromeškejte důležité pohyby cen!</i>",
+            parse_mode='HTML'
+        )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📖 <b>CryptoWatch Pro - Nápověda</b>\n\n"
+        "🔹 <b>Příkazy:</b>\n\n"
+        "<b>/start</b> - Úvodní zpráva\n"
+        "<b>/add TICKER</b> - Přidat kryptoměnu ke sledování\n"
+        "   Příklad: /add BTC\n"
+        "   Bot se zeptá na prahovou hodnotu (např. 5 pro 5%)\n\n"
+        "<b>/list</b> - Zobrazit všechny sledované kryptoměny\n\n"
+        "<b>/update [TICKER]</b> - Změnit prahovou hodnotu\n"
+        "   Příklad: /update BTC nebo jen /update (vybere z menu)\n\n"
+        "<b>/setall %</b> - Nastavit stejnou prahovou hodnotu pro všechny\n"
+        "   Příklad: /setall 5 (nastaví 5% pro všechny)\n\n"
+        "<b>/remove TICKER</b> - Odebrat kryptoměnu ze sledování\n"
+        "   Příklad: /remove BTC\n\n"
+        "<b>/help</b> - Zobrazit tuto nápovědu\n\n"
+        "💡 <b>Tip:</b> Bot kontroluje ceny každou minutu a pošle upozornění, když cena změní o nastavené procento.",
         parse_mode='HTML'
     )
 
@@ -276,7 +303,7 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not symbol:
             await update.message.reply_text("❌ Chyba kontextu. Zkuste /add znovu.")
             return ConversationHandler.END
-            
+        
         # Načtení a úprava konfigurace uživatele
         user_config, full_config = get_user_config(chat_id)
         user_config[symbol] = {'name': name, 'threshold': threshold}
@@ -304,7 +331,7 @@ async def list_cryptos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_config:
         await update.message.reply_text("📭 Nemáte nastavené žádné kryptoměny.")
         return
-
+    
     msg = "📋 <b>Vaše kryptoměny:</b>\n\n"
     for symbol, conf in user_config.items():
         last_price = user_state.get(symbol, {}).get('last_notification_price', 0)
@@ -354,7 +381,7 @@ async def update_threshold_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not user_config:
         await update.message.reply_text("Nemáte co upravovat.")
-        return ConversationHandler.END
+    return ConversationHandler.END
 
     # Pokud uživatel zadal /update BTC
     if context.args:
@@ -369,7 +396,7 @@ async def update_threshold_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = [[InlineKeyboardButton(f"{s} ({c['threshold']*100}%)", callback_data=f"upd_{s}")] for s, c in user_config.items()]
     await update.message.reply_text("Vyberte:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
-
+        
 async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -491,7 +518,7 @@ def main():
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Chybí TELEGRAM_BOT_TOKEN")
         return
-
+    
     if DATABASE_URL:
         init_database()
         print("✅ DB Inicializována")
@@ -500,10 +527,10 @@ def main():
 
     # Handlers
     app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('help', help_command))
     app.add_handler(CommandHandler('list', list_cryptos))
     app.add_handler(CommandHandler('remove', remove_crypto))
     app.add_handler(CommandHandler('setall', setall))
-    app.add_handler(CommandHandler('help', start))
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('add', add_crypto)],
