@@ -233,7 +233,9 @@ def get_stock_price(symbol):
     
     for url in endpoints:
         try:
+            print(f"📡 Zkouším endpoint: {url}")
             response = requests.get(url, timeout=10, headers=headers, allow_redirects=True)
+            print(f"📊 Status code: {response.status_code}")
             if response.status_code == 200:
                 try:
                     data = response.json()
@@ -289,20 +291,27 @@ def get_stock_price(symbol):
 def get_price(symbol):
     """Získá cenu kryptoměny nebo akcie - automaticky detekuje typ."""
     # Nejdřív zkusíme kryptoměnu
+    print(f"🔍 Zkouším kryptoměnu: {symbol}")
     price = get_crypto_price(symbol.upper())
     if price is not None:
+        print(f"✅ Nalezena kryptoměna: {symbol} = ${price}")
         return price, 'crypto'
     
     # Pokud to není kryptoměna, zkusíme akcii
+    print(f"🔍 Zkouším akcii: {symbol}")
     price, api_name = get_stock_price(symbol.upper())
     if price is not None:
+        print(f"✅ Nalezena akcie: {symbol} = ${price} z {api_name}")
         return price, 'stock'
     
+    print(f"❌ {symbol} nebyl nalezen ani jako kryptoměna, ani jako akcie")
     return None, None
 
 def validate_ticker(symbol):
     """Ověří ticker a vrátí typ (crypto/stock), název a cenu."""
+    print(f"🔍 Validuji ticker: {symbol}")
     price, asset_type = get_price(symbol.upper())
+    print(f"📊 Výsledek get_price: price={price}, asset_type={asset_type}")
     if price is not None:
         # Pro kryptoměny použijeme symbol jako název, pro akcie zkusíme získat název
         name = symbol.upper()
@@ -318,9 +327,10 @@ def validate_ticker(symbol):
                         result = data['chart']['result']
                         if result and len(result) > 0 and 'meta' in result[0]:
                             name = result[0]['meta'].get('longName', symbol.upper())
-            except:
-                pass
+            except Exception as e:
+                print(f"⚠️  Chyba při získávání názvu akcie: {e}")
         return True, name, price
+    print(f"❌ Ticker {symbol} nebyl nalezen")
     return False, None, None
 
 # --- Telegram Handlers ---
