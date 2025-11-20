@@ -168,27 +168,51 @@ def save_user_state(chat_id, user_state, full_state):
     full_state[str(chat_id)] = user_state
     save_data('crypto_state', STATE_FILE, full_state)
 
-# --- API Funkce (beze změn, jen zkráceno) ---
+# --- API Funkce ---
+def get_price_from_cryptocompare(symbol):
+    """Získá cenu z CryptoCompare API."""
+    url = f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD'
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if 'USD' in data:
+            return float(data['USD']), 'CryptoCompare'
+    except:
+        pass
+    return None, None
+
+def get_price_from_binance(symbol):
+    """Získá cenu z Binance API."""
+    symbol_map = {
+        'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'AAVE': 'AAVEUSDT',
+        'ZEC': 'ZECUSDT', 'ICP': 'ICPUSDT', 'COW': 'COWUSDT',
+        'GNO': 'GNOUSDT', 'LTC': 'LTCUSDT',
+    }
+    binance_symbol = symbol_map.get(symbol.upper())
+    if not binance_symbol:
+        return None, None
+    url = f'https://api.binance.com/api/v3/ticker/price?symbol={binance_symbol}'
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if 'price' in data:
+            return float(data['price']), 'Binance'
+    except:
+        pass
+    return None, None
+
 def get_crypto_price(symbol):
-    # Zjednodušená verze s rotací API
-    apis = [
-        f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD',
-        f'https://api.coingecko.com/api/v3/simple/price?ids={symbol.lower()}&vs_currencies=usd', # Basic mapping fallback
-        f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT'
-    ]
-    random.shuffle(apis)
+    """Získá aktuální cenu kryptoměny z náhodně vybraného API."""
+    api_functions = [get_price_from_cryptocompare, get_price_from_binance]
+    random.shuffle(api_functions)
     
-    for url in apis:
+    for api_func in api_functions:
         try:
-            resp = requests.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                # Parsing response based on structure
-                if 'USD' in data: return float(data['USD'])
-                if 'price' in data: return float(data['price'])
-                if isinstance(data, dict) and len(data) == 1: # Simple coingecko format check
-                     val = list(data.values())[0]
-                     if 'usd' in val: return float(val['usd'])
+            price, api_name = api_func(symbol)
+            if price is not None:
+                return price
         except:
             continue
     return None
@@ -378,15 +402,31 @@ async def price_check_loop(app, stop_event):
             full_state = load_data('crypto_state', STATE_FILE)
             state_changed = False
             
+            if not full_config:
+                print("⚠️  Žádní uživatelé ke sledování")
+                await asyncio.sleep(CHECK_INTERVAL)
+                continue
+            
             # Získáme seznam všech unikátních kryptoměn k dotazu (optimalizace API volání)
             all_symbols = set()
             for user_conf in full_config.values():
                 all_symbols.update(user_conf.keys())
             
+            if not all_symbols:
+                print("⚠️  Žádné kryptoměny ke sledování")
+                await asyncio.sleep(CHECK_INTERVAL)
+                continue
+            
+            print(f"📊 Kontroluji {len(all_symbols)} kryptoměn pro {len(full_config)} uživatelů")
+            
             current_prices = {}
             for sym in all_symbols:
                 p = get_crypto_price(sym)
-                if p: current_prices[sym] = p
+                if p: 
+                    current_prices[sym] = p
+                    print(f"✅ [{sym}] ${p:,.2f}")
+                else:
+                    print(f"❌ [{sym}] Nepodařilo se získat cenu")
                 await asyncio.sleep(0.5) # Throttle
             
             # Kontrola pro každého uživatele
@@ -395,7 +435,9 @@ async def price_check_loop(app, stop_event):
                 user_state = full_state[chat_id_str]
                 
                 for symbol, settings in user_conf.items():
-                    if symbol not in current_prices: continue
+                    if symbol not in current_prices: 
+                        print(f"⚠️  [{chat_id_str}] {symbol}: Cena nedostupná")
+                        continue
                     
                     curr_price = current_prices[symbol]
                     last_price = user_state.get(symbol, {}).get('last_notification_price')
@@ -405,9 +447,12 @@ async def price_check_loop(app, stop_event):
                         # První běh
                         user_state[symbol] = {'last_notification_price': curr_price}
                         state_changed = True
+                        print(f"💾 [{chat_id_str}] {symbol}: První cena uložena ${curr_price:,.2f}")
                         continue
                         
                     change_pct = abs((curr_price - last_price) / last_price)
+                    
+                    print(f"📊 [{chat_id_str}] {symbol}: ${curr_price:,.2f} | Změna: {change_pct*100:.2f}% (limit: {threshold*100}%)")
                     
                     if change_pct >= threshold:
                         # Alert
@@ -422,20 +467,24 @@ async def price_check_loop(app, stop_event):
                             await app.bot.send_message(chat_id=int(chat_id_str), text=msg, parse_mode='HTML')
                             user_state[symbol]['last_notification_price'] = curr_price
                             state_changed = True
-                            print(f"✅ Alert pro {chat_id_str}: {symbol}")
+                            print(f"✅ Alert odeslán pro {chat_id_str}: {symbol} {direction} {change_pct*100:.1f}%")
                         except Exception as e:
                             print(f"❌ Chyba odeslání uživateli {chat_id_str}: {e}")
 
             if state_changed:
                 save_data('crypto_state', STATE_FILE, full_state)
+                print("💾 Stav uložen")
                 
             # Čekání
+            print()  # Prázdný řádek
             for _ in range(CHECK_INTERVAL):
                 if stop_event.is_set(): break
                 await asyncio.sleep(1)
                 
         except Exception as e:
             print(f"❌ Error v loopu: {e}")
+            import traceback
+            traceback.print_exc()
             await asyncio.sleep(30)
 
 def main():
@@ -472,11 +521,20 @@ def main():
 
     # Background Task
     stop_event = asyncio.Event()
-    async def on_start(a):
-        a.bg_task = asyncio.create_task(price_check_loop(a, stop_event))
     
-    # Cleanup při ukončení (pokus)
-    # Render často pošle SIGTERM, python-telegram-bot to handluje, ale loop musíme zastavit
+    async def post_init(app: Application):
+        """Spustí background loop po inicializaci aplikace."""
+        app.bg_task = asyncio.create_task(price_check_loop(app, stop_event))
+        print("✅ Background price check loop spuštěn")
+    
+    app.post_init = post_init
+    
+    # Cleanup při ukončení
+    def cleanup():
+        print("🛑 Ukončuji aplikaci...")
+        stop_event.set()
+    
+    atexit.register(cleanup)
     
     print("🤖 Bot běží...")
     app.run_polling(drop_pending_updates=True)
