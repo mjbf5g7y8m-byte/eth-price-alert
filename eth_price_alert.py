@@ -448,13 +448,8 @@ async def send_telegram_notification(bot, symbol, name, current_price, last_pric
     change_emoji = "🟢" if current_price > last_price else "🔴"
     
     message = f"""
-{change_emoji} <b>{name} ({symbol}) Price Alert</b> {change_emoji}
-
-{direction} o <b>{price_change_pct:.2f}%</b>
-
-💰 Aktuální cena: <b>${current_price:,.2f}</b>
-📊 Předchozí cena: <b>${last_price:,.2f}</b>
-📅 Čas: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+{change_emoji} <b>{name} ({symbol})</b> {direction} <b>{price_change_pct:.1f}%</b>
+💰 <b>${current_price:,.2f}</b> (předtím: ${last_price:,.2f})
 """
     
     try:
