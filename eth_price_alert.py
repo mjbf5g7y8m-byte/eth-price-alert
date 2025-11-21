@@ -32,16 +32,69 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # Stavy konverzace
 WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD = range(3)
 
-# Whitelist známých kryptoměn - tyto tickery budou vždy považovány za kryptoměny
-KNOWN_CRYPTO = {
-    'BTC', 'ETH', 'LTC', 'BCH', 'XRP', 'ADA', 'DOT', 'LINK', 'XLM', 'EOS',
-    'TRX', 'XMR', 'DASH', 'ETC', 'ZEC', 'VET', 'THETA', 'FIL', 'AAVE',
-    'UNI', 'SOL', 'MATIC', 'ALGO', 'ATOM', 'AVAX', 'LUNA', 'NEAR', 'FTM',
-    'GNO', 'MKR', 'COMP', 'SNX', 'CRV', 'SUSHI', '1INCH', 'YFI', 'BAL',
-    'BAND', 'BAT', 'BNB', 'CELO', 'CHZ', 'ENJ', 'GRT', 'KNC', 'MANA',
-    'OMG', 'REN', 'SAND', 'SKL', 'STORJ', 'UMA', 'ZRX', 'DOGE', 'SHIB',
-    'ICP', 'APT', 'ARB', 'OP', 'SUI', 'TIA', 'SEI', 'INJ', 'TIA'
+# Globální cache pro seznam kryptoměn z CoinGecko a CoinMarketCap
+KNOWN_CRYPTO = set()
+CRYPTO_LIST_LOADED = False
+
+# Blacklist známých akcií - tyto tickery NIKDY nebudou považovány za kryptoměny, i když jsou na CoinGecko
+STOCK_BLACKLIST = {
+    'AAPL', 'TSLA', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'NVDA', 'NFLX', 'DIS',
+    'BABA', 'V', 'JPM', 'WMT', 'MA', 'PG', 'JNJ', 'UNH', 'HD', 'PYPL',
+    'BAC', 'ADBE', 'CRM', 'NKE', 'XOM', 'CVX', 'ABBV', 'COST', 'AVGO', 'PEP',
+    'TMO', 'CSCO', 'ABT', 'DHR', 'ACN', 'VZ', 'CMCSA', 'NEE', 'LIN', 'WFC',
+    'ORCL', 'PM', 'TXN', 'RTX', 'UPS', 'QCOM', 'DE', 'BMY', 'HON', 'LOW',
+    'SPGI', 'INTU', 'AMGN', 'C', 'BLK', 'AMT', 'TJX', 'AXP', 'BKNG', 'GS',
+    'ADP', 'SYK', 'ZTS', 'ISRG', 'GILD', 'ADI', 'REGN', 'CDNS', 'SNPS', 'KLAC',
+    'MCHP', 'NXPI', 'FTNT', 'ANSS', 'CTSH', 'PAYX', 'CTAS', 'FAST', 'NDAQ', 'CPRT'
 }
+
+def load_crypto_list_from_coingecko():
+    """Načte seznam všech kryptoměn z CoinGecko API a CoinMarketCap API."""
+    global KNOWN_CRYPTO, CRYPTO_LIST_LOADED
+    
+    if CRYPTO_LIST_LOADED:
+        return KNOWN_CRYPTO
+    
+    crypto_symbols = set()
+    
+    # 1. Načteme z CoinGecko
+    try:
+        print("📡 Načítám seznam kryptoměn z CoinGecko...")
+        url = 'https://api.coingecko.com/api/v3/coins/list'
+        response = requests.get(url, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            for coin in data:
+                symbol = coin.get('symbol', '').upper()
+                if symbol and symbol not in STOCK_BLACKLIST:
+                    crypto_symbols.add(symbol)
+            print(f"✅ Načteno {len(crypto_symbols)} kryptoměn z CoinGecko")
+        else:
+            print(f"⚠️  Chyba při načítání z CoinGecko: Status {response.status_code}")
+    except Exception as e:
+        print(f"⚠️  Chyba při načítání z CoinGecko: {e}")
+    
+    # 2. Načteme z CoinMarketCap (pokud je dostupný API klíč)
+    # CoinMarketCap má rate limit, takže to použijeme jen jako doplněk
+    # Pro teď použijeme jen CoinGecko
+    
+    KNOWN_CRYPTO = crypto_symbols
+    CRYPTO_LIST_LOADED = True
+    print(f"✅ Celkem {len(KNOWN_CRYPTO)} kryptoměn v seznamu")
+    return KNOWN_CRYPTO
+
+def is_crypto_ticker(symbol):
+    """Zkontroluje, jestli je ticker kryptoměna podle CoinGecko/CoinMarketCap."""
+    symbol_upper = symbol.upper()
+    
+    # Pokud je v blacklistu akcií, není to crypto
+    if symbol_upper in STOCK_BLACKLIST:
+        return False
+    
+    if not CRYPTO_LIST_LOADED:
+        load_crypto_list_from_coingecko()
+    return symbol_upper in KNOWN_CRYPTO
 
 def get_db_connection():
     """Vytvoří připojení k databázi."""
@@ -169,8 +222,8 @@ def get_user_config(chat_id):
     config_changed = False
     for symbol, settings in user_config.items():
         if 'asset_type' not in settings:
-            # Pokud ticker je v whitelistu kryptoměn, nastavíme crypto
-            if symbol in KNOWN_CRYPTO:
+            # Pokud ticker je v seznamu kryptoměn z CoinGecko, nastavíme crypto
+            if is_crypto_ticker(symbol):
                 settings['asset_type'] = 'crypto'
                 config_changed = True
             else:
@@ -322,9 +375,9 @@ def get_price(symbol, asset_type=None):
     """Získá cenu kryptoměny nebo akcie. Pokud je zadán asset_type, použije ho. Jinak detekuje automaticky."""
     symbol_upper = symbol.upper()
     
-    # Pokud je ticker v whitelistu kryptoměn, zkusíme jen kryptoměnu
-    if symbol_upper in KNOWN_CRYPTO:
-        print(f"🔍 [{symbol_upper}] Je v whitelistu kryptoměn, zkouším jen crypto API")
+    # Pokud je ticker v seznamu kryptoměn z CoinGecko, zkusíme jen kryptoměnu
+    if is_crypto_ticker(symbol_upper):
+        print(f"🔍 [{symbol_upper}] Je kryptoměna (CoinGecko), zkouším jen crypto API")
         price = get_crypto_price(symbol_upper)
         if price is not None:
             print(f"✅ Nalezena kryptoměna: {symbol_upper} = ${price}")
@@ -608,11 +661,11 @@ async def price_check_loop(app, stop_event):
                 for sym, settings in user_conf.items():
                     # Pokud symbol ještě není v mapě, přidáme ho s typem z konfigurace
                     if sym not in symbol_types:
-                        # Zkusíme získat typ z konfigurace, pokud není, použijeme whitelist nebo None
+                        # Zkusíme získat typ z konfigurace, pokud není, použijeme CoinGecko seznam nebo None
                         asset_type = settings.get('asset_type')
                         if not asset_type:
-                            # Pokud není v konfiguraci, zkontrolujeme whitelist
-                            asset_type = 'crypto' if sym in KNOWN_CRYPTO else None
+                            # Pokud není v konfiguraci, zkontrolujeme CoinGecko seznam
+                            asset_type = 'crypto' if is_crypto_ticker(sym) else None
                         symbol_types[sym] = asset_type
             
             if not symbol_types:
@@ -695,6 +748,9 @@ def main():
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Chybí TELEGRAM_BOT_TOKEN")
         return
+    
+    # Načteme seznam kryptoměn z CoinGecko při startu
+    load_crypto_list_from_coingecko()
     
     if DATABASE_URL:
         init_database()
