@@ -32,6 +32,17 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # Stavy konverzace
 WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD = range(3)
 
+# Whitelist známých kryptoměn - tyto tickery budou vždy považovány za kryptoměny
+KNOWN_CRYPTO = {
+    'BTC', 'ETH', 'LTC', 'BCH', 'XRP', 'ADA', 'DOT', 'LINK', 'XLM', 'EOS',
+    'TRX', 'XMR', 'DASH', 'ETC', 'ZEC', 'VET', 'THETA', 'FIL', 'AAVE',
+    'UNI', 'SOL', 'MATIC', 'ALGO', 'ATOM', 'AVAX', 'LUNA', 'NEAR', 'FTM',
+    'GNO', 'MKR', 'COMP', 'SNX', 'CRV', 'SUSHI', '1INCH', 'YFI', 'BAL',
+    'BAND', 'BAT', 'BNB', 'CELO', 'CHZ', 'ENJ', 'GRT', 'KNC', 'MANA',
+    'OMG', 'REN', 'SAND', 'SKL', 'STORJ', 'UMA', 'ZRX', 'DOGE', 'SHIB',
+    'ICP', 'APT', 'ARB', 'OP', 'SUI', 'TIA', 'SEI', 'INJ', 'TIA'
+}
+
 def get_db_connection():
     """Vytvoří připojení k databázi."""
     if not DATABASE_URL:
@@ -152,6 +163,25 @@ def get_user_config(chat_id):
     # Zajistíme, že vracíme dict, i když je prázdný
     if str(chat_id) not in full_config:
         full_config[str(chat_id)] = {}
+    
+    # Migrace: doplníme asset_type pro tickery, které ho nemají
+    user_config = full_config[str(chat_id)]
+    config_changed = False
+    for symbol, settings in user_config.items():
+        if 'asset_type' not in settings:
+            # Pokud ticker je v whitelistu kryptoměn, nastavíme crypto
+            if symbol in KNOWN_CRYPTO:
+                settings['asset_type'] = 'crypto'
+                config_changed = True
+            else:
+                # Pro ostatní tickery nastavíme stock (pravděpodobně akcie)
+                settings['asset_type'] = 'stock'
+                config_changed = True
+    
+    # Pokud jsme něco změnili, uložíme to
+    if config_changed:
+        save_data('crypto_config', CONFIG_FILE, full_config)
+    
     return full_config[str(chat_id)], full_config
 
 def save_user_config(chat_id, user_config, full_config):
@@ -288,27 +318,52 @@ def get_stock_price(symbol):
     
     return None, None
 
-def get_price(symbol):
-    """Získá cenu kryptoměny nebo akcie - automaticky detekuje typ."""
-    # Nejdřív zkusíme kryptoměnu
-    print(f"🔍 Zkouším kryptoměnu: {symbol}")
-    price = get_crypto_price(symbol.upper())
+def get_price(symbol, asset_type=None):
+    """Získá cenu kryptoměny nebo akcie. Pokud je zadán asset_type, použije ho. Jinak detekuje automaticky."""
+    symbol_upper = symbol.upper()
+    
+    # Pokud je ticker v whitelistu kryptoměn, zkusíme jen kryptoměnu
+    if symbol_upper in KNOWN_CRYPTO:
+        print(f"🔍 [{symbol_upper}] Je v whitelistu kryptoměn, zkouším jen crypto API")
+        price = get_crypto_price(symbol_upper)
+        if price is not None:
+            print(f"✅ Nalezena kryptoměna: {symbol_upper} = ${price}")
+            return price, 'crypto'
+        print(f"❌ Kryptoměna {symbol_upper} nebyla nalezena v crypto API")
+        return None, None
+    
+    # Pokud je zadán typ, použijeme ho
+    if asset_type == 'crypto':
+        print(f"🔍 [{symbol_upper}] Typ je crypto (z konfigurace), zkouším crypto API")
+        price = get_crypto_price(symbol_upper)
+        if price is not None:
+            return price, 'crypto'
+        return None, None
+    elif asset_type == 'stock':
+        print(f"🔍 [{symbol_upper}] Typ je stock (z konfigurace), zkouším stock API")
+        price, api_name = get_stock_price(symbol_upper)
+        if price is not None:
+            return price, 'stock'
+        return None, None
+    
+    # Automatická detekce - nejdřív kryptoměna, pak akcie
+    print(f"🔍 [{symbol_upper}] Automatická detekce - zkouším kryptoměnu")
+    price = get_crypto_price(symbol_upper)
     if price is not None:
-        print(f"✅ Nalezena kryptoměna: {symbol} = ${price}")
+        print(f"✅ Nalezena kryptoměna: {symbol_upper} = ${price}")
         return price, 'crypto'
     
-    # Pokud to není kryptoměna, zkusíme akcii
-    print(f"🔍 Zkouším akcii: {symbol}")
-    price, api_name = get_stock_price(symbol.upper())
+    print(f"🔍 [{symbol_upper}] Není kryptoměna, zkouším akcii")
+    price, api_name = get_stock_price(symbol_upper)
     if price is not None:
-        print(f"✅ Nalezena akcie: {symbol} = ${price} z {api_name}")
+        print(f"✅ Nalezena akcie: {symbol_upper} = ${price} z {api_name}")
         return price, 'stock'
     
-    print(f"❌ {symbol} nebyl nalezen ani jako kryptoměna, ani jako akcie")
+    print(f"❌ {symbol_upper} nebyl nalezen ani jako kryptoměna, ani jako akcie")
     return None, None
 
 def validate_ticker(symbol):
-    """Ověří ticker a vrátí typ (crypto/stock), název a cenu."""
+    """Ověří ticker a vrátí (is_valid, name, price, asset_type)."""
     print(f"🔍 Validuji ticker: {symbol}")
     price, asset_type = get_price(symbol.upper())
     print(f"📊 Výsledek get_price: price={price}, asset_type={asset_type}")
@@ -329,9 +384,9 @@ def validate_ticker(symbol):
                             name = result[0]['meta'].get('longName', symbol.upper())
             except Exception as e:
                 print(f"⚠️  Chyba při získávání názvu akcie: {e}")
-        return True, name, price
+        return True, name, price, asset_type
     print(f"❌ Ticker {symbol} nebyl nalezen")
-    return False, None, None
+    return False, None, None, None
 
 # --- Telegram Handlers ---
 
@@ -382,7 +437,7 @@ async def add_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = context.args[0].upper()
     await update.message.reply_text(f"🔍 Ověřuji {symbol}...")
     
-    is_valid, name, price = validate_ticker(symbol)
+    is_valid, name, price, asset_type = validate_ticker(symbol)
     
     if not is_valid:
         await update.message.reply_text(f"❌ {symbol} nebyl nalezen.")
@@ -392,6 +447,7 @@ async def add_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['pending_symbol'] = symbol
     context.user_data['pending_name'] = name
     context.user_data['pending_price'] = price
+    context.user_data['pending_asset_type'] = asset_type
     
     await update.message.reply_text(
         f"✅ <b>{name}</b> (${price:,.2f})\n"
@@ -410,6 +466,7 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         symbol = context.user_data.get('pending_symbol')
         name = context.user_data.get('pending_name')
+        asset_type = context.user_data.get('pending_asset_type', 'crypto')  # Default crypto pro zpětnou kompatibilitu
         
         if not symbol:
             await update.message.reply_text("❌ Chyba kontextu. Zkuste /add znovu.")
@@ -417,7 +474,7 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Načtení a úprava konfigurace uživatele
         user_config, full_config = get_user_config(chat_id)
-        user_config[symbol] = {'name': name, 'threshold': threshold}
+        user_config[symbol] = {'name': name, 'threshold': threshold, 'asset_type': asset_type}
         save_user_config(chat_id, user_config, full_config)
         
         # Inicializace stavu
@@ -545,24 +602,32 @@ async def price_check_loop(app, stop_event):
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
             
-            # Získáme seznam všech unikátních symbolů (kryptoměny + akcie) k dotazu (optimalizace API volání)
-            all_symbols = set()
+            # Získáme seznam všech unikátních symbolů s jejich typy (kryptoměny + akcie) k dotazu (optimalizace API volání)
+            symbol_types = {}  # {symbol: asset_type}
             for user_conf in full_config.values():
-                all_symbols.update(user_conf.keys())
+                for sym, settings in user_conf.items():
+                    # Pokud symbol ještě není v mapě, přidáme ho s typem z konfigurace
+                    if sym not in symbol_types:
+                        # Zkusíme získat typ z konfigurace, pokud není, použijeme whitelist nebo None
+                        asset_type = settings.get('asset_type')
+                        if not asset_type:
+                            # Pokud není v konfiguraci, zkontrolujeme whitelist
+                            asset_type = 'crypto' if sym in KNOWN_CRYPTO else None
+                        symbol_types[sym] = asset_type
             
-            if not all_symbols:
+            if not symbol_types:
                 print("⚠️  Žádné symboly ke sledování")
                 await asyncio.sleep(CHECK_INTERVAL)
                 continue
             
-            print(f"📊 Kontroluji {len(all_symbols)} symbolů (kryptoměny + akcie) pro {len(full_config)} uživatelů")
+            print(f"📊 Kontroluji {len(symbol_types)} symbolů (kryptoměny + akcie) pro {len(full_config)} uživatelů")
             
             current_prices = {}
-            for sym in all_symbols:
-                p, asset_type = get_price(sym)
+            for sym, asset_type in symbol_types.items():
+                p, detected_type = get_price(sym, asset_type=asset_type)
                 if p: 
                     current_prices[sym] = p
-                    asset_emoji = "₿" if asset_type == 'crypto' else "📈"
+                    asset_emoji = "₿" if detected_type == 'crypto' else "📈"
                     print(f"✅ [{sym}] {asset_emoji} ${p:,.2f}")
                 else:
                     print(f"❌ [{sym}] Nepodařilo se získat cenu")
