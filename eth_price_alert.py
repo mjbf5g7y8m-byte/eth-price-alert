@@ -34,6 +34,7 @@ WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD = range(3)
 
 # Globální cache pro seznam kryptoměn z CoinGecko a CoinMarketCap
 KNOWN_CRYPTO = set()
+CRYPTO_COIN_IDS = {}  # Mapování symbol -> coin_id pro CoinGecko
 CRYPTO_LIST_LOADED = False
 
 # Blacklist známých akcií - tyto tickery NIKDY nebudou považovány za kryptoměny, i když jsou na CoinGecko
@@ -50,12 +51,13 @@ STOCK_BLACKLIST = {
 
 def load_crypto_list_from_coingecko():
     """Načte seznam všech kryptoměn z CoinGecko API a CoinMarketCap API."""
-    global KNOWN_CRYPTO, CRYPTO_LIST_LOADED
+    global KNOWN_CRYPTO, CRYPTO_COIN_IDS, CRYPTO_LIST_LOADED
     
     if CRYPTO_LIST_LOADED:
         return KNOWN_CRYPTO
     
     crypto_symbols = set()
+    coin_ids_map = {}
     
     # 1. Načteme z CoinGecko
     try:
@@ -67,8 +69,12 @@ def load_crypto_list_from_coingecko():
             data = response.json()
             for coin in data:
                 symbol = coin.get('symbol', '').upper()
+                coin_id = coin.get('id', '')
                 if symbol and symbol not in STOCK_BLACKLIST:
                     crypto_symbols.add(symbol)
+                    # Uložíme coin_id pro symbol (pokud má symbol více coin_id, vezmeme první/největší market cap)
+                    if symbol not in coin_ids_map:
+                        coin_ids_map[symbol] = coin_id
             print(f"✅ Načteno {len(crypto_symbols)} kryptoměn z CoinGecko")
         else:
             print(f"⚠️  Chyba při načítání z CoinGecko: Status {response.status_code}")
@@ -80,6 +86,7 @@ def load_crypto_list_from_coingecko():
     # Pro teď použijeme jen CoinGecko
     
     KNOWN_CRYPTO = crypto_symbols
+    CRYPTO_COIN_IDS = coin_ids_map
     CRYPTO_LIST_LOADED = True
     print(f"✅ Celkem {len(KNOWN_CRYPTO)} kryptoměn v seznamu")
     return KNOWN_CRYPTO
@@ -226,7 +233,7 @@ def get_user_config(chat_id):
             if is_crypto_ticker(symbol):
                 settings['asset_type'] = 'crypto'
                 config_changed = True
-            else:
+        else:
                 # Pro ostatní tickery nastavíme stock (pravděpodobně akcie)
                 settings['asset_type'] = 'stock'
                 config_changed = True
@@ -281,33 +288,74 @@ def get_price_from_binance(symbol):
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            if 'price' in data:
-                return float(data['price']), 'Binance'
+        if 'price' in data:
+            return float(data['price']), 'Binance'
     except:
         pass
     return None, None
 
 def get_price_from_coingecko(symbol):
     """Získá cenu z CoinGecko API pomocí symbolu."""
-    # CoinGecko vyžaduje coin ID, ne symbol, takže musíme najít ID pomocí search
+    # Použijeme cache coin_id, pokud je k dispozici
+    symbol_upper = symbol.upper()
+    
+    # Nejdřív zkusíme použít cache coin_id
+    if CRYPTO_LIST_LOADED and symbol_upper in CRYPTO_COIN_IDS:
+        coin_id = CRYPTO_COIN_IDS[symbol_upper]
+        try:
+            price_url = f'https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd'
+            price_response = requests.get(price_url, timeout=10)
+            
+            if price_response.status_code == 429:
+                # Rate limit - počkáme chvíli a zkusíme znovu
+                time.sleep(1)
+                price_response = requests.get(price_url, timeout=10)
+            
+            if price_response.status_code == 200:
+                price_data = price_response.json()
+                if coin_id in price_data and 'usd' in price_data[coin_id]:
+                    price_val = price_data[coin_id]['usd']
+                    if price_val is not None:
+                        return float(price_val), 'CoinGecko'
+        except Exception as e:
+            pass
+    
+    # Fallback: použijeme search API (pomalejší, ale funguje pro všechny)
     try:
-        # Nejprve vyhledáme coin podle symbolu
-        search_url = f'https://api.coingecko.com/api/v3/search?query={symbol.upper()}'
+        search_url = f'https://api.coingecko.com/api/v3/search?query={symbol_upper}'
         search_response = requests.get(search_url, timeout=10)
+        
+        if search_response.status_code == 429:
+            # Rate limit - počkáme chvíli a zkusíme znovu
+            time.sleep(1)
+            search_response = requests.get(search_url, timeout=10)
+        
         if search_response.status_code == 200:
             search_data = search_response.json()
             if 'coins' in search_data and len(search_data['coins']) > 0:
                 # Najdeme coin, který má přesně shodný symbol (case-insensitive)
                 for coin in search_data['coins']:
-                    if coin.get('symbol', '').upper() == symbol.upper():
+                    coin_symbol = coin.get('symbol', '').upper()
+                    if coin_symbol == symbol_upper:
                         coin_id = coin['id']
                         # Získáme cenu pomocí coin ID
                         price_url = f'https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd'
                         price_response = requests.get(price_url, timeout=10)
+                        
+                        if price_response.status_code == 429:
+                            # Rate limit - počkáme chvíli a zkusíme znovu
+                            time.sleep(1)
+                            price_response = requests.get(price_url, timeout=10)
+                        
                         if price_response.status_code == 200:
                             price_data = price_response.json()
                             if coin_id in price_data and 'usd' in price_data[coin_id]:
-                                return float(price_data[coin_id]['usd']), 'CoinGecko'
+                                price_val = price_data[coin_id]['usd']
+                                if price_val is not None:
+                                    # Uložíme coin_id do cache pro příště
+                                    if symbol_upper not in CRYPTO_COIN_IDS:
+                                        CRYPTO_COIN_IDS[symbol_upper] = coin_id
+                                    return float(price_val), 'CoinGecko'
                         break
     except Exception as e:
         pass
@@ -639,7 +687,7 @@ async def update_threshold_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not user_config:
         await update.message.reply_text("Nemáte co upravovat.")
-        return ConversationHandler.END
+    return ConversationHandler.END
 
     # Pokud uživatel zadal /update BTC
     if context.args:
@@ -648,7 +696,7 @@ async def update_threshold_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data['pending_symbol'] = symbol
             context.user_data['pending_name'] = symbol
             await update.message.reply_text(f"Zadejte nové % pro {symbol}:")
-            return WAITING_UPDATE_THRESHOLD
+    return WAITING_UPDATE_THRESHOLD
 
     # Jinak tlačítka
     keyboard = [[InlineKeyboardButton(f"{s} ({c['threshold']*100}%)", callback_data=f"upd_{s}")] for s, c in user_config.items()]
