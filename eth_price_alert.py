@@ -254,50 +254,87 @@ def save_user_state(chat_id, user_state, full_state):
 # --- API Funkce ---
 def get_price_from_cryptocompare(symbol):
     """Získá cenu z CryptoCompare API."""
-    url = f'https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USD'
+    url = f'https://min-api.cryptocompare.com/data/price?fsym={symbol.upper()}&tsyms=USD'
+    headers = {}
+    if CRYPTOCOMPARE_API_KEY:
+        headers['authorization'] = f'Apikey {CRYPTOCOMPARE_API_KEY}'
+    
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if 'USD' in data:
-            return float(data['USD']), 'CryptoCompare'
-    except:
+        response = requests.get(url, timeout=10, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if 'USD' in data and data['USD'] is not None:
+                return float(data['USD']), 'CryptoCompare'
+            elif 'Response' in data and data['Response'] == 'Error':
+                # API vrátilo chybu
+                pass
+    except Exception as e:
         pass
     return None, None
 
 def get_price_from_binance(symbol):
     """Získá cenu z Binance API."""
-    symbol_map = {
-        'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'AAVE': 'AAVEUSDT',
-        'ZEC': 'ZECUSDT', 'ICP': 'ICPUSDT', 'COW': 'COWUSDT',
-        'GNO': 'GNOUSDT', 'LTC': 'LTCUSDT',
-    }
-    binance_symbol = symbol_map.get(symbol.upper())
-    if not binance_symbol:
-        return None, None
+    # Zkusíme symbol přímo s USDT párem
+    binance_symbol = f"{symbol.upper()}USDT"
     url = f'https://api.binance.com/api/v3/ticker/price?symbol={binance_symbol}'
     try:
         response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if 'price' in data:
-            return float(data['price']), 'Binance'
+        if response.status_code == 200:
+            data = response.json()
+            if 'price' in data:
+                return float(data['price']), 'Binance'
     except:
         pass
     return None, None
 
+def get_price_from_coingecko(symbol):
+    """Získá cenu z CoinGecko API pomocí symbolu."""
+    # CoinGecko vyžaduje coin ID, ne symbol, takže musíme najít ID pomocí search
+    try:
+        # Nejprve vyhledáme coin podle symbolu
+        search_url = f'https://api.coingecko.com/api/v3/search?query={symbol.upper()}'
+        search_response = requests.get(search_url, timeout=10)
+        if search_response.status_code == 200:
+            search_data = search_response.json()
+            if 'coins' in search_data and len(search_data['coins']) > 0:
+                # Najdeme coin, který má přesně shodný symbol (case-insensitive)
+                for coin in search_data['coins']:
+                    if coin.get('symbol', '').upper() == symbol.upper():
+                        coin_id = coin['id']
+                        # Získáme cenu pomocí coin ID
+                        price_url = f'https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd'
+                        price_response = requests.get(price_url, timeout=10)
+                        if price_response.status_code == 200:
+                            price_data = price_response.json()
+                            if coin_id in price_data and 'usd' in price_data[coin_id]:
+                                return float(price_data[coin_id]['usd']), 'CoinGecko'
+                        break
+    except Exception as e:
+        pass
+    
+    return None, None
+
 def get_crypto_price(symbol):
     """Získá aktuální cenu kryptoměny z náhodně vybraného API."""
-    api_functions = [get_price_from_cryptocompare, get_price_from_binance]
+    api_functions = [
+        get_price_from_coingecko,  # CoinGecko jako první, protože má nejvíce kryptoměn
+        get_price_from_cryptocompare,
+        get_price_from_binance
+    ]
     random.shuffle(api_functions)
     
     for api_func in api_functions:
         try:
             price, api_name = api_func(symbol)
             if price is not None:
+                print(f"✅ [{symbol}] Cena získána z {api_name}: ${price:,.2f}")
                 return price
-        except:
+            else:
+                print(f"⚠️  [{symbol}] {api_func.__name__} nevrátil cenu")
+        except Exception as e:
+            print(f"⚠️  Chyba v {api_func.__name__} pro {symbol}: {e}")
             continue
+    print(f"❌ [{symbol}] Všechna crypto API selhala")
     return None
 
 def get_stock_price(symbol):
