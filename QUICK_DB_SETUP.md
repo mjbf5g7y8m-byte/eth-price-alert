@@ -38,3 +38,6 @@ Render restartuje service a v logách uvidíte:
 
 **Pomocný skript:** Spusťte `./create_render_db.sh` pro interaktivní průvodce
 
+
+
+

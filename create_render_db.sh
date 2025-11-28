@@ -70,3 +70,6 @@ echo "Pokud vidíte varování, zkontrolujte, jestli je DATABASE_URL správně n
 echo ""
 echo "🎉 Data se nyní ukládají do databáze a přežijí každý redeploy!"
 
+
+
+

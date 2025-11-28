@@ -78,3 +78,6 @@ Nyní se všechna data ukládají do databáze a **přežijí každý redeploy**
 
 Podrobnější návod najdete v [DATABASE_SETUP.md](DATABASE_SETUP.md)
 
+
+
+

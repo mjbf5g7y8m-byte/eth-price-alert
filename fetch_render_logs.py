@@ -151,3 +151,6 @@ if __name__ == '__main__':
         print("   2. Získejte API klíč na: https://dashboard.render.com/account/api-keys")
         print("   3. Najděte Service ID v URL vašeho service na Render dashboardu")
 
+
+
+

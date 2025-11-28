@@ -41,6 +41,8 @@ CRYPTO_LIST_LOADED = False
 # Mapuje symbol -> coin_id (preferujeme hlavní/populárnější token)
 SPECIFIC_COIN_IDS = {
     'SAFE': 'safe',  # Safe (https://www.coingecko.com/en/coins/safe)
+    'COW': 'cow-protocol',  # CoW Protocol (https://www.coingecko.com/en/coins/cow-protocol)
+    'RAIL': 'railgun',  # Railgun (https://www.coingecko.com/en/coins/railgun)
 }
 
 # Blacklist známých akcií - tyto tickery NIKDY nebudou považovány za kryptoměny, i když jsou na CoinGecko
