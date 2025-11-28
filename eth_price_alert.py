@@ -30,12 +30,18 @@ CRYPTOCOMPARE_API_KEY = os.getenv('CRYPTOCOMPARE_API_KEY', '7ffa2f0b80215a9e1240
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Stavy konverzace
-WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD = range(3)
+WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD, WAITING_ASSET_TYPE = range(4)
 
 # Globální cache pro seznam kryptoměn z CoinGecko a CoinMarketCap
 KNOWN_CRYPTO = set()
 CRYPTO_COIN_IDS = {}  # Mapování symbol -> coin_id pro CoinGecko
 CRYPTO_LIST_LOADED = False
+
+# Specifické mapování pro tokeny, které mají více variant se stejným symbolem
+# Mapuje symbol -> coin_id (preferujeme hlavní/populárnější token)
+SPECIFIC_COIN_IDS = {
+    'SAFE': 'safe',  # Safe (https://www.coingecko.com/en/coins/safe)
+}
 
 # Blacklist známých akcií - tyto tickery NIKDY nebudou považovány za kryptoměny, i když jsou na CoinGecko
 STOCK_BLACKLIST = {
@@ -232,15 +238,17 @@ def get_user_config(chat_id):
             # Pokud ticker je v seznamu kryptoměn z CoinGecko, nastavíme crypto
             if is_crypto_ticker(symbol):
                 settings['asset_type'] = 'crypto'
-                config_changed = True
-        else:
+                print(f"🔄 Migrace: {symbol} nastaven jako crypto")
+            else:
                 # Pro ostatní tickery nastavíme stock (pravděpodobně akcie)
                 settings['asset_type'] = 'stock'
-                config_changed = True
+                print(f"🔄 Migrace: {symbol} nastaven jako stock")
+            config_changed = True
     
     # Pokud jsme něco změnili, uložíme to
     if config_changed:
         save_data('crypto_config', CONFIG_FILE, full_config)
+        print(f"💾 Migrace uložena pro uživatele {chat_id}")
     
     return full_config[str(chat_id)], full_config
 
@@ -299,7 +307,30 @@ def get_price_from_coingecko(symbol):
     # Použijeme cache coin_id, pokud je k dispozici
     symbol_upper = symbol.upper()
     
-    # Nejdřív zkusíme použít cache coin_id
+    # Nejdřív zkontrolujeme specifické mapování (má prioritu)
+    if symbol_upper in SPECIFIC_COIN_IDS:
+        coin_id = SPECIFIC_COIN_IDS[symbol_upper]
+        try:
+            price_url = f'https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd'
+            price_response = requests.get(price_url, timeout=10)
+            
+            if price_response.status_code == 429:
+                # Rate limit - počkáme chvíli a zkusíme znovu
+                time.sleep(1)
+                price_response = requests.get(price_url, timeout=10)
+            
+            if price_response.status_code == 200:
+                price_data = price_response.json()
+                if coin_id in price_data and 'usd' in price_data[coin_id]:
+                    price_val = price_data[coin_id]['usd']
+                    if price_val is not None:
+                        # Uložíme do cache
+                        CRYPTO_COIN_IDS[symbol_upper] = coin_id
+                        return float(price_val), 'CoinGecko'
+        except Exception as e:
+            pass
+    
+    # Pak zkusíme použít cache coin_id
     if CRYPTO_LIST_LOADED and symbol_upper in CRYPTO_COIN_IDS:
         coin_id = CRYPTO_COIN_IDS[symbol_upper]
         try:
@@ -333,10 +364,21 @@ def get_price_from_coingecko(symbol):
         if search_response.status_code == 200:
             search_data = search_response.json()
             if 'coins' in search_data and len(search_data['coins']) > 0:
-                # Najdeme coin, který má přesně shodný symbol (case-insensitive)
+                # Najdeme všechny coiny se shodným symbolem
+                matching_coins = []
                 for coin in search_data['coins']:
                     coin_symbol = coin.get('symbol', '').upper()
                     if coin_symbol == symbol_upper:
+                        matching_coins.append(coin)
+                
+                # Pokud máme více coinů, preferujeme ten s nižším market_cap_rank (vyšší market cap)
+                # nebo pokud není rank, vezmeme první
+                if matching_coins:
+                    # Seřadíme podle market_cap_rank (nižší = lepší), None na konec
+                    matching_coins.sort(key=lambda x: (x.get('market_cap_rank') is None, x.get('market_cap_rank', 999999)))
+                    
+                    # Zkusíme každý coin dokud nenajdeme validní cenu
+                    for coin in matching_coins:
                         coin_id = coin['id']
                         # Získáme cenu pomocí coin ID
                         price_url = f'https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd'
@@ -353,10 +395,9 @@ def get_price_from_coingecko(symbol):
                                 price_val = price_data[coin_id]['usd']
                                 if price_val is not None:
                                     # Uložíme coin_id do cache pro příště
-                                    if symbol_upper not in CRYPTO_COIN_IDS:
-                                        CRYPTO_COIN_IDS[symbol_upper] = coin_id
+                                    CRYPTO_COIN_IDS[symbol_upper] = coin_id
                                     return float(price_val), 'CoinGecko'
-                        break
+                        # Pokud tento coin nevrátil cenu, zkusíme další
     except Exception as e:
         pass
     
@@ -500,8 +541,35 @@ def get_price(symbol, asset_type=None):
     print(f"❌ {symbol_upper} nebyl nalezen ani jako kryptoměna, ani jako akcie")
     return None, None
 
+def validate_ticker_with_type(symbol, asset_type):
+    """Ověří ticker s daným typem a vrátí (is_valid, name, price, asset_type)."""
+    print(f"🔍 Validuji ticker: {symbol} jako {asset_type}")
+    price, detected_type = get_price(symbol.upper(), asset_type=asset_type)
+    print(f"📊 Výsledek get_price: price={price}, detected_type={detected_type}")
+    
+    if price is not None:
+        # Pro kryptoměny použijeme symbol jako název, pro akcie zkusíme získat název
+        name = symbol.upper()
+        if asset_type == 'stock':
+            # Zkusíme získat název akcie z Yahoo Finance
+            try:
+                url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}'
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                response = requests.get(url, timeout=5, headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'chart' in data and 'result' in data['chart']:
+                        result = data['chart']['result']
+                        if result and len(result) > 0 and 'meta' in result[0]:
+                            name = result[0]['meta'].get('longName', symbol.upper())
+            except Exception as e:
+                print(f"⚠️  Chyba při získávání názvu akcie: {e}")
+        return True, name, price, asset_type
+    print(f"❌ Ticker {symbol} nebyl nalezen jako {asset_type}")
+    return False, None, None, None
+
 def validate_ticker(symbol):
-    """Ověří ticker a vrátí (is_valid, name, price, asset_type)."""
+    """Ověří ticker a vrátí (is_valid, name, price, asset_type). Používá automatickou detekci."""
     print(f"🔍 Validuji ticker: {symbol}")
     price, asset_type = get_price(symbol.upper())
     print(f"📊 Výsledek get_price: price={price}, asset_type={asset_type}")
@@ -573,12 +641,43 @@ async def add_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     symbol = context.args[0].upper()
-    await update.message.reply_text(f"🔍 Ověřuji {symbol}...")
     
-    is_valid, name, price, asset_type = validate_ticker(symbol)
+    # Uložíme symbol do kontextu
+    context.user_data['pending_symbol'] = symbol
+    
+    # Zeptáme se uživatele na typ assetu
+    keyboard = [
+        [InlineKeyboardButton("🪙 Kryptoměna", callback_data=f"asset_crypto_{symbol}")],
+        [InlineKeyboardButton("📈 Akcie", callback_data=f"asset_stock_{symbol}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"🔍 <b>{symbol}</b>\n\n"
+        "Je to kryptoměna nebo akcie?",
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
+    return WAITING_ASSET_TYPE
+
+async def handle_asset_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pro výběr typu assetu (crypto/stock)."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parsujeme callback data: asset_crypto_BTC nebo asset_stock_AAPL
+    data_parts = query.data.split('_')
+    asset_type = data_parts[1]  # 'crypto' nebo 'stock'
+    symbol = data_parts[2]  # ticker symbol
+    
+    await query.edit_message_text(f"🔍 Ověřuji {symbol} jako {asset_type}...")
+    
+    # Validujeme ticker s daným typem
+    is_valid, name, price, detected_type = validate_ticker_with_type(symbol, asset_type)
     
     if not is_valid:
-        await update.message.reply_text(f"❌ {symbol} nebyl nalezen.")
+        asset_name = "kryptoměna" if asset_type == "crypto" else "akcie"
+        await query.message.reply_text(f"❌ {symbol} nebyl nalezen jako {asset_name}.")
         return ConversationHandler.END
     
     # Uložíme do paměti konverzace
@@ -587,8 +686,9 @@ async def add_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['pending_price'] = price
     context.user_data['pending_asset_type'] = asset_type
     
-    await update.message.reply_text(
-        f"✅ <b>{name}</b> (${price:,.2f})\n"
+    asset_emoji = "🪙" if asset_type == "crypto" else "📈"
+    await query.message.reply_text(
+        f"✅ {asset_emoji} <b>{name}</b> (${price:,.2f})\n\n"
         "Zadejte procento pro alert (např. 5):",
         parse_mode='HTML'
     )
@@ -852,7 +952,10 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('add', add_crypto)],
-        states={WAITING_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_threshold)]},
+        states={
+            WAITING_ASSET_TYPE: [CallbackQueryHandler(handle_asset_type_selection, pattern='^asset_(crypto|stock)_')],
+            WAITING_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_threshold)]
+        },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     app.add_handler(conv_handler)
