@@ -235,16 +235,31 @@ def get_user_config(chat_id):
     # Migrace: doplníme asset_type pro tickery, které ho nemají
     user_config = full_config[str(chat_id)]
     config_changed = False
+    
+    # Specifické crypto tokeny, které mají být vždy nastaveny jako crypto
+    FORCE_CRYPTO = ['COW', 'SAFE', 'RAIL']
+    
     for symbol, settings in user_config.items():
         if 'asset_type' not in settings:
+            # Vynucené crypto tokeny
+            if symbol.upper() in FORCE_CRYPTO:
+                settings['asset_type'] = 'crypto'
+                print(f"🔄 Migrace: {symbol} nastaven jako crypto (vynuceno)")
+                config_changed = True
             # Pokud ticker je v seznamu kryptoměn z CoinGecko, nastavíme crypto
-            if is_crypto_ticker(symbol):
+            elif is_crypto_ticker(symbol):
                 settings['asset_type'] = 'crypto'
                 print(f"🔄 Migrace: {symbol} nastaven jako crypto")
+                config_changed = True
             else:
                 # Pro ostatní tickery nastavíme stock (pravděpodobně akcie)
                 settings['asset_type'] = 'stock'
                 print(f"🔄 Migrace: {symbol} nastaven jako stock")
+                config_changed = True
+        elif symbol.upper() in FORCE_CRYPTO and settings.get('asset_type') != 'crypto':
+            # Pokud už má asset_type, ale je to v FORCE_CRYPTO a není to crypto, opravíme to
+            settings['asset_type'] = 'crypto'
+            print(f"🔄 Migrace: {symbol} opraven na crypto (z {settings.get('asset_type')})")
             config_changed = True
     
     # Pokud jsme něco změnili, uložíme to
@@ -889,6 +904,68 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Zrušeno.")
     return ConversationHandler.END
 
+async def broadcast_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Pošle zprávu o updatu všem uživatelům (pouze pro admina)."""
+    chat_id = update.effective_chat.id
+    
+    # Kontrola, jestli je to admin
+    if ADMIN_CHAT_ID and str(chat_id) != str(ADMIN_CHAT_ID):
+        await update.message.reply_text("❌ Tento příkaz je pouze pro admina.")
+        return
+    
+    await update.message.reply_text("📤 Posílám zprávu o updatu všem uživatelům...")
+    
+    # Načteme všechny uživatele
+    full_config = load_data('crypto_config', CONFIG_FILE)
+    
+    if not full_config:
+        await update.message.reply_text("❌ Žádní uživatelé v databázi.")
+        return
+    
+    message = (
+        "🔄 <b>Aktualizace botu</b>\n\n"
+        "✨ <b>Co je nového:</b>\n\n"
+        "1️⃣ <b>Výběr typu assetu</b>\n"
+        "   Při přidávání tickeru si nyní vyberete, zda jde o:\n"
+        "   🪙 Kryptoměnu\n"
+        "   📈 Akcii\n\n"
+        "2️⃣ <b>Vylepšené načítání cen</b>\n"
+        "   Přidány nové spolehlivé API zdroje:\n"
+        "   • Coinbase\n"
+        "   • Kraken\n"
+        "   • Vylepšený Binance\n\n"
+        "3️⃣ <b>Automatická migrace</b>\n"
+        "   Vaše existující tickery byly automaticky kategorizovány\n\n"
+        "📝 <b>Jak to funguje:</b>\n"
+        "Příkaz: /add BTC\n"
+        "Bot se zeptá: Je to kryptoměna nebo akcie?\n"
+        "Vyberete typ → Bot ověří cenu → Nastavíte alert\n\n"
+        "🎯 <b>Výhody:</b>\n"
+        "• Rychlejší načítání cen\n"
+        "• Přesnější detekce\n"
+        "• Žádné záměny mezi akciemi a kryptoměnami\n\n"
+        "Zkuste to: /add [TICKER]"
+    )
+    
+    success_count = 0
+    fail_count = 0
+    
+    for user_chat_id in full_config.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=int(user_chat_id),
+                text=message,
+                parse_mode='HTML'
+            )
+            success_count += 1
+            await asyncio.sleep(0.5)  # Rate limiting
+        except Exception as e:
+            print(f"❌ Chyba při odesílání uživateli {user_chat_id}: {e}")
+            fail_count += 1
+    
+    summary = f"✅ Zpráva odeslána!\n\n📊 Statistika:\n✅ Úspěšně: {success_count}\n❌ Chyba: {fail_count}"
+    await update.message.reply_text(summary)
+
 # --- Background Loop ---
 
 async def price_check_loop(app, stop_event):
@@ -1015,6 +1092,7 @@ def main():
     app.add_handler(CommandHandler('list', list_cryptos))
     app.add_handler(CommandHandler('remove', remove_crypto))
     app.add_handler(CommandHandler('setall', setall))
+    app.add_handler(CommandHandler('broadcast', broadcast_update))
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('add', add_crypto)],
