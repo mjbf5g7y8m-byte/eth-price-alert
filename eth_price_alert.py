@@ -302,6 +302,56 @@ def get_price_from_binance(symbol):
         pass
     return None, None
 
+def get_price_from_coinbase(symbol):
+    """Získá cenu z Coinbase API."""
+    try:
+        url = f'https://api.coinbase.com/v2/prices/{symbol.upper()}-USD/spot'
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if 'data' in data and 'amount' in data['data']:
+                price = float(data['data']['amount'])
+                print(f"✅ Coinbase: {symbol} = ${price:,.2f}")
+                return price, 'Coinbase'
+    except Exception as e:
+        print(f"⚠️  Coinbase API error for {symbol}: {e}")
+    return None, None
+
+def get_price_from_kraken(symbol):
+    """Získá cenu z Kraken API."""
+    # Kraken používá specifické páry symbolů
+    kraken_pairs = {
+        'BTC': 'XXBTZUSD',
+        'ETH': 'XETHZUSD',
+        'XRP': 'XXRPZUSD',
+        'LTC': 'XLTCZUSD',
+        'BCH': 'BCHUSDT',
+        'ADA': 'ADAUSD',
+        'DOT': 'DOTUSD',
+        'LINK': 'LINKUSD',
+        'UNI': 'UNIUSD',
+        'SOL': 'SOLUSD',
+    }
+    
+    symbol_upper = symbol.upper()
+    pair = kraken_pairs.get(symbol_upper, f'{symbol_upper}USD')
+    
+    try:
+        url = f'https://api.kraken.com/0/public/Ticker?pair={pair}'
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if 'result' in data and data['result']:
+                # Získáme první pár z výsledku
+                pair_data = next(iter(data['result'].values()))
+                if 'c' in pair_data and len(pair_data['c']) > 0:
+                    price = float(pair_data['c'][0])  # 'c' je last trade price
+                    print(f"✅ Kraken: {symbol} = ${price:,.2f}")
+                    return price, 'Kraken'
+    except Exception as e:
+        print(f"⚠️  Kraken API error for {symbol}: {e}")
+    return None, None
+
 def get_price_from_coingecko(symbol):
     """Získá cenu z CoinGecko API pomocí symbolu."""
     # Použijeme cache coin_id, pokud je k dispozici
@@ -316,7 +366,8 @@ def get_price_from_coingecko(symbol):
             
             if price_response.status_code == 429:
                 # Rate limit - počkáme chvíli a zkusíme znovu
-                time.sleep(1)
+                print(f"⚠️  CoinGecko rate limit pro {symbol}, čekám...")
+                time.sleep(2)
                 price_response = requests.get(price_url, timeout=10)
             
             if price_response.status_code == 200:
@@ -326,9 +377,10 @@ def get_price_from_coingecko(symbol):
                     if price_val is not None:
                         # Uložíme do cache
                         CRYPTO_COIN_IDS[symbol_upper] = coin_id
+                        print(f"✅ CoinGecko (specific): {symbol} = ${price_val:,.2f}")
                         return float(price_val), 'CoinGecko'
         except Exception as e:
-            pass
+            print(f"⚠️  CoinGecko API error (specific) for {symbol}: {e}")
     
     # Pak zkusíme použít cache coin_id
     if CRYPTO_LIST_LOADED and symbol_upper in CRYPTO_COIN_IDS:
@@ -338,8 +390,8 @@ def get_price_from_coingecko(symbol):
             price_response = requests.get(price_url, timeout=10)
             
             if price_response.status_code == 429:
-                # Rate limit - počkáme chvíli a zkusíme znovu
-                time.sleep(1)
+                print(f"⚠️  CoinGecko rate limit pro {symbol}, čekám...")
+                time.sleep(2)
                 price_response = requests.get(price_url, timeout=10)
             
             if price_response.status_code == 200:
@@ -347,9 +399,10 @@ def get_price_from_coingecko(symbol):
                 if coin_id in price_data and 'usd' in price_data[coin_id]:
                     price_val = price_data[coin_id]['usd']
                     if price_val is not None:
+                        print(f"✅ CoinGecko (cache): {symbol} = ${price_val:,.2f}")
                         return float(price_val), 'CoinGecko'
         except Exception as e:
-            pass
+            print(f"⚠️  CoinGecko API error (cache) for {symbol}: {e}")
     
     # Fallback: použijeme search API (pomalejší, ale funguje pro všechny)
     try:
@@ -357,8 +410,8 @@ def get_price_from_coingecko(symbol):
         search_response = requests.get(search_url, timeout=10)
         
         if search_response.status_code == 429:
-            # Rate limit - počkáme chvíli a zkusíme znovu
-            time.sleep(1)
+            print(f"⚠️  CoinGecko rate limit pro {symbol}, čekám...")
+            time.sleep(2)
             search_response = requests.get(search_url, timeout=10)
         
         if search_response.status_code == 200:
@@ -385,8 +438,8 @@ def get_price_from_coingecko(symbol):
                         price_response = requests.get(price_url, timeout=10)
                         
                         if price_response.status_code == 429:
-                            # Rate limit - počkáme chvíli a zkusíme znovu
-                            time.sleep(1)
+                            print(f"⚠️  CoinGecko rate limit pro {symbol}, čekám...")
+                            time.sleep(2)
                             price_response = requests.get(price_url, timeout=10)
                         
                         if price_response.status_code == 200:
@@ -396,22 +449,31 @@ def get_price_from_coingecko(symbol):
                                 if price_val is not None:
                                     # Uložíme coin_id do cache pro příště
                                     CRYPTO_COIN_IDS[symbol_upper] = coin_id
+                                    print(f"✅ CoinGecko (search): {symbol} = ${price_val:,.2f}")
                                     return float(price_val), 'CoinGecko'
                         # Pokud tento coin nevrátil cenu, zkusíme další
     except Exception as e:
-        pass
+        print(f"⚠️  CoinGecko API error (search) for {symbol}: {e}")
     
     return None, None
 
 def get_crypto_price(symbol):
-    """Získá aktuální cenu kryptoměny z náhodně vybraného API."""
+    """Získá aktuální cenu kryptoměny z náhodně vybraného API s retry mechanikou."""
+    # Prioritizujeme API podle spolehlivosti
     api_functions = [
-        get_price_from_coingecko,  # CoinGecko jako první, protože má nejvíce kryptoměn
-        get_price_from_cryptocompare,
-        get_price_from_binance
+        get_price_from_binance,      # Nejrychlejší a nejspolehlivější
+        get_price_from_coinbase,     # Velmi spolehlivé
+        get_price_from_cryptocompare, # Dobré
+        get_price_from_kraken,       # Pro specifické tokeny
+        get_price_from_coingecko,    # Má rate limit, ale nejvíce tokenů
     ]
-    random.shuffle(api_functions)
     
+    # Náhodně promícháme první 3 API pro load balancing
+    first_three = api_functions[:3]
+    random.shuffle(first_three)
+    api_functions = first_three + api_functions[3:]
+    
+    last_error = None
     for api_func in api_functions:
         try:
             price, api_name = api_func(symbol)
@@ -421,9 +483,11 @@ def get_crypto_price(symbol):
             else:
                 print(f"⚠️  [{symbol}] {api_func.__name__} nevrátil cenu")
         except Exception as e:
+            last_error = e
             print(f"⚠️  Chyba v {api_func.__name__} pro {symbol}: {e}")
             continue
-    print(f"❌ [{symbol}] Všechna crypto API selhala")
+    
+    print(f"❌ [{symbol}] Všechna crypto API selhala. Poslední chyba: {last_error}")
     return None
 
 def get_stock_price(symbol):
