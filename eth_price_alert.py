@@ -28,9 +28,10 @@ CONFIG_FILE = 'crypto_config.json'
 CHECK_INTERVAL = 60  # Kontrola každou minutu
 CRYPTOCOMPARE_API_KEY = os.getenv('CRYPTOCOMPARE_API_KEY', '7ffa2f0b80215a9e12406537b44f7dafc8deda54354efcfda93fac2eaaaeaf20')
 DATABASE_URL = os.getenv('DATABASE_URL')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
 # Stavy konverzace
-WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD, WAITING_ASSET_TYPE = range(4)
+WAITING_TICKER, WAITING_THRESHOLD, WAITING_UPDATE_THRESHOLD, WAITING_ASSET_TYPE, WAITING_AI_CONFIRM = range(5)
 
 # Globální cache pro seznam kryptoměn z CoinGecko a CoinMarketCap
 KNOWN_CRYPTO = set()
@@ -306,15 +307,14 @@ def get_price_from_cryptocompare(symbol):
 
 def get_price_from_binance(symbol):
     """Získá cenu z Binance API."""
-    # Zkusíme symbol přímo s USDT párem
     binance_symbol = f"{symbol.upper()}USDT"
     url = f'https://api.binance.com/api/v3/ticker/price?symbol={binance_symbol}'
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             data = response.json()
-        if 'price' in data:
-            return float(data['price']), 'Binance'
+            if 'price' in data:
+                return float(data['price']), 'Binance'
     except:
         pass
     return None, None
@@ -476,7 +476,16 @@ def get_price_from_coingecko(symbol):
 
 def get_crypto_price(symbol):
     """Získá aktuální cenu kryptoměny z náhodně vybraného API s retry mechanikou."""
-    # Prioritizujeme API podle spolehlivosti
+    symbol_upper = symbol.upper()
+    
+    # Pro tokeny s SPECIFIC_COIN_IDS (RAIL, COW, SAFE...) zkusíme CoinGecko PRVNÍ,
+    # protože ostatní API je často nemají
+    if symbol_upper in SPECIFIC_COIN_IDS:
+        price, api_name = get_price_from_coingecko(symbol)
+        if price is not None:
+            print(f"✅ [{symbol}] Cena získána z {api_name}: ${price:,.2f}")
+            return price
+    
     api_functions = [
         get_price_from_binance,      # Nejrychlejší a nejspolehlivější
         get_price_from_coinbase,     # Velmi spolehlivé
@@ -675,6 +684,121 @@ def validate_ticker(symbol):
     print(f"❌ Ticker {symbol} nebyl nalezen")
     return False, None, None, None
 
+# --- AI Asset Search ---
+
+CURRENCY_SYMBOLS = {'USD': '$', 'EUR': '€', 'GBP': '£', 'JPY': '¥', 'CHF': 'CHF ', 'CZK': 'Kč'}
+
+def search_asset_with_ai(query):
+    """Použije Claude API k identifikaci assetu z uživatelského dotazu."""
+    if not ANTHROPIC_API_KEY:
+        return fallback_search(query)
+    
+    try:
+        prompt = (
+            f'User wants to add an asset to their price alert bot. They typed: "{query}"\n\n'
+            'Identify what they most likely mean. Return a JSON array of up to 3 most likely matches.\n'
+            'For each match provide:\n'
+            '- "ticker": Exact ticker for Yahoo Finance (stocks) or standard crypto symbol\n'
+            '  - European stocks MUST include exchange suffix: ADYEN.AS (Amsterdam), BMW.DE (Frankfurt), NESN.SW (Zurich), ULVR.L (London), MC.PA (Paris)\n'
+            '  - US stocks: just the ticker (AAPL, TSLA)\n'
+            '  - Crypto: standard symbol (BTC, ETH, SOL)\n'
+            '- "name": Full name of the company/asset\n'
+            '- "type": "crypto" or "stock"\n'
+            '- "exchange": Exchange name or null for common crypto\n'
+            '- "currency": Trading currency (USD, EUR, GBP, CHF...)\n\n'
+            'Return ONLY the JSON array. No markdown, no explanation, no code blocks.\n'
+            'If nothing matches, return [].\n\n'
+            'Examples:\n'
+            '"adyen" → [{"ticker":"ADYEN.AS","name":"Adyen N.V.","type":"stock","exchange":"Euronext Amsterdam","currency":"EUR"}]\n'
+            '"bitcoin" → [{"ticker":"BTC","name":"Bitcoin","type":"crypto","exchange":null,"currency":"USD"}]\n'
+            '"tesla" → [{"ticker":"TSLA","name":"Tesla, Inc.","type":"stock","exchange":"NASDAQ","currency":"USD"}]\n'
+            '"nestle" → [{"ticker":"NESN.SW","name":"Nestlé S.A.","type":"stock","exchange":"SIX Swiss","currency":"CHF"}]\n'
+            '"LVMH" → [{"ticker":"MC.PA","name":"LVMH Moët Hennessy","type":"stock","exchange":"Euronext Paris","currency":"EUR"}]'
+        )
+        
+        response = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+            },
+            json={
+                'model': 'claude-3-5-haiku-latest',
+                'max_tokens': 1024,
+                'messages': [{'role': 'user', 'content': prompt}]
+            },
+            timeout=15
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            text = data['content'][0]['text'].strip()
+            if text.startswith('```'):
+                text = text.split('\n', 1)[1]
+                if text.endswith('```'):
+                    text = text[:-3]
+                text = text.strip()
+            matches = json.loads(text)
+            if isinstance(matches, list) and len(matches) > 0:
+                print(f"🤖 AI nalezlo {len(matches)} výsledků pro '{query}': {[m.get('ticker') for m in matches]}")
+                return matches
+        else:
+            print(f"⚠️  Claude API error: {response.status_code} {response.text[:200]}")
+    except Exception as e:
+        print(f"⚠️  AI search error: {e}")
+    
+    return fallback_search(query)
+
+def fallback_search(query):
+    """Záložní vyhledávání bez AI - zkusí přímý ticker lookup."""
+    symbol = query.upper().strip()
+    results = []
+    
+    if is_crypto_ticker(symbol):
+        results.append({
+            'ticker': symbol,
+            'name': symbol,
+            'type': 'crypto',
+            'exchange': None,
+            'currency': 'USD'
+        })
+    
+    price, api_name = get_stock_price(symbol)
+    if price:
+        name = symbol
+        try:
+            url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}'
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            resp = requests.get(url, timeout=5, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                if 'chart' in data and 'result' in data['chart']:
+                    meta = data['chart']['result'][0].get('meta', {})
+                    name = meta.get('longName', symbol)
+        except:
+            pass
+        results.append({
+            'ticker': symbol,
+            'name': name,
+            'type': 'stock',
+            'exchange': None,
+            'currency': 'USD'
+        })
+    
+    if not results and not is_crypto_ticker(symbol):
+        price = get_crypto_price(symbol)
+        if price:
+            results.append({
+                'ticker': symbol,
+                'name': symbol,
+                'type': 'crypto',
+                'exchange': None,
+                'currency': 'USD'
+            })
+    
+    return results if results else None
+
 # --- Telegram Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -688,10 +812,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Dostanete upozornění jen na <b>reálné významné pohyby</b>\n"
         "• <b>Mnohem efektivnější</b> než neustálé sledování cen\n"
         "• Žádné zbytečné notifikace - jen když to opravdu stojí za to\n\n"
-        "📊 <b>Podporuje:</b> Kryptoměny (BTC, ETH) a akcie (AAPL, TSLA)\n\n"
+        "📊 <b>Podporuje:</b> Kryptoměny, US i EU akcie\n\n"
         "⚡ <b>Rychlý start:</b>\n"
-        "/add BTC - Přidat kryptoměnu\n"
-        "/add AAPL - Přidat akcii\n"
+        "/add bitcoin - Přidat kryptoměnu\n"
+        "/add adyen - Přidat EU akcii\n"
+        "/add tesla - Přidat US akcii\n"
         "/list - Zobrazit sledované\n"
         "/help - Více informací",
         parse_mode='HTML'
@@ -704,9 +829,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Bot kontroluje ceny každou minutu. <b>Upozornění dostanete pouze když</b> cena překročí váš nastavený práh <b>nahoru nebo dolů</b>.\n\n"
         "✅ <b>Výhoda:</b> Nemusíte sledovat denní/měsíční změny - dostanete upozornění jen na reálné významné pohyby. Mnohem efektivnější!\n\n"
         "🔹 <b>Příkazy:</b>\n\n"
-        "<b>/add TICKER</b> - Přidat kryptoměnu nebo akcii\n"
-        "   /add BTC, /add AAPL\n"
-        "   Bot se zeptá na prahovou hodnotu (např. 5 pro 5%)\n\n"
+        "<b>/add NÁZEV</b> - Přidat kryptoměnu nebo akcii\n"
+        "   /add bitcoin, /add adyen, /add tesla\n"
+        "   🤖 AI najde správný ticker i pro EU burzy\n\n"
         "<b>/list</b> - Zobrazit všechny sledované\n\n"
         "<b>/update [TICKER]</b> - Změnit prahovou hodnotu\n\n"
         "<b>/setall %</b> - Nastavit stejnou hodnotu pro všechny\n"
@@ -718,58 +843,91 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ Použití: /add BTC")
+        await update.message.reply_text(
+            "❌ Použití: /add BTC nebo /add název společnosti\n"
+            "Příklady: /add bitcoin, /add adyen, /add tesla",
+            parse_mode='HTML'
+        )
         return ConversationHandler.END
     
-    symbol = context.args[0].upper()
+    query = ' '.join(context.args)
     
-    # Uložíme symbol do kontextu
-    context.user_data['pending_symbol'] = symbol
+    msg = await update.message.reply_text(f"🤖 Hledám '<b>{query}</b>'...", parse_mode='HTML')
     
-    # Zeptáme se uživatele na typ assetu
-    keyboard = [
-        [InlineKeyboardButton("🪙 Kryptoměna", callback_data=f"asset_crypto_{symbol}")],
-        [InlineKeyboardButton("📈 Akcie", callback_data=f"asset_stock_{symbol}")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    matches = search_asset_with_ai(query)
     
-    await update.message.reply_text(
-        f"🔍 <b>{symbol}</b>\n\n"
-        "Je to kryptoměna nebo akcie?",
-        reply_markup=reply_markup,
-        parse_mode='HTML'
-    )
-    return WAITING_ASSET_TYPE
+    if not matches:
+        await msg.edit_text(f"❌ Nepodařilo se najít '<b>{query}</b>'.\nZkuste jiný název nebo ticker.", parse_mode='HTML')
+        return ConversationHandler.END
+    
+    context.user_data['ai_matches'] = matches
+    
+    keyboard = []
+    for i, m in enumerate(matches):
+        emoji = "🪙" if m.get('type') == 'crypto' else "📈"
+        label = f"{emoji} {m['name']} ({m['ticker']})"
+        exchange = m.get('exchange')
+        if exchange:
+            label += f" [{exchange}]"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"aim_{i}")])
+    keyboard.append([InlineKeyboardButton("❌ Zrušit", callback_data="aim_cancel")])
+    
+    text = f"🔍 Výsledky pro '<b>{query}</b>':\n\nVyberte správnou možnost:"
+    await msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    return WAITING_AI_CONFIRM
 
-async def handle_asset_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler pro výběr typu assetu (crypto/stock)."""
+async def handle_ai_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler pro výběr z AI výsledků."""
     query = update.callback_query
     await query.answer()
     
-    # Parsujeme callback data: asset_crypto_BTC nebo asset_stock_AAPL
-    data_parts = query.data.split('_')
-    asset_type = data_parts[1]  # 'crypto' nebo 'stock'
-    symbol = data_parts[2]  # ticker symbol
-    
-    await query.edit_message_text(f"🔍 Ověřuji {symbol} jako {asset_type}...")
-    
-    # Validujeme ticker s daným typem
-    is_valid, name, price, detected_type = validate_ticker_with_type(symbol, asset_type)
-    
-    if not is_valid:
-        asset_name = "kryptoměna" if asset_type == "crypto" else "akcie"
-        await query.message.reply_text(f"❌ {symbol} nebyl nalezen jako {asset_name}.")
+    if query.data == "aim_cancel":
+        await query.edit_message_text("❌ Zrušeno.")
+        context.user_data.clear()
         return ConversationHandler.END
     
-    # Uložíme do paměti konverzace
+    idx = int(query.data.split('_')[1])
+    matches = context.user_data.get('ai_matches', [])
+    
+    if idx >= len(matches):
+        await query.edit_message_text("❌ Chyba. Zkuste /add znovu.")
+        return ConversationHandler.END
+    
+    match = matches[idx]
+    symbol = match['ticker']
+    asset_type = match.get('type', 'crypto')
+    name = match.get('name', symbol)
+    currency = match.get('currency', 'USD')
+    
+    await query.edit_message_text(f"🔍 Ověřuji cenu <b>{name}</b> ({symbol})...", parse_mode='HTML')
+    
+    is_valid, validated_name, price, _ = validate_ticker_with_type(symbol, asset_type)
+    
+    if not is_valid:
+        await query.message.reply_text(
+            f"❌ <b>{name}</b> ({symbol}) — cena nedostupná.\n"
+            "Ticker nemusí být správný nebo API ho nepodporuje.\n"
+            "Zkuste /add s jiným názvem.",
+            parse_mode='HTML'
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    final_name = name if name != symbol else (validated_name or symbol)
     context.user_data['pending_symbol'] = symbol
-    context.user_data['pending_name'] = name
+    context.user_data['pending_name'] = final_name
     context.user_data['pending_price'] = price
     context.user_data['pending_asset_type'] = asset_type
+    context.user_data['pending_currency'] = currency
     
-    asset_emoji = "🪙" if asset_type == "crypto" else "📈"
+    curr_sym = CURRENCY_SYMBOLS.get(currency, '$')
+    emoji = "🪙" if asset_type == "crypto" else "📈"
+    exchange_info = f"\n🏛️ Burza: {match.get('exchange')}" if match.get('exchange') else ""
+    
     await query.message.reply_text(
-        f"✅ {asset_emoji} <b>{name}</b> (${price:,.2f})\n\n"
+        f"✅ {emoji} <b>{final_name}</b> ({symbol})\n"
+        f"💰 Aktuální cena: {curr_sym}{price:,.2f} {currency}"
+        f"{exchange_info}\n\n"
         "Zadejte procento pro alert (např. 5):",
         parse_mode='HTML'
     )
@@ -785,15 +943,15 @@ async def handle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         symbol = context.user_data.get('pending_symbol')
         name = context.user_data.get('pending_name')
-        asset_type = context.user_data.get('pending_asset_type', 'crypto')  # Default crypto pro zpětnou kompatibilitu
+        asset_type = context.user_data.get('pending_asset_type', 'crypto')
+        currency = context.user_data.get('pending_currency', 'USD')
         
         if not symbol:
             await update.message.reply_text("❌ Chyba kontextu. Zkuste /add znovu.")
             return ConversationHandler.END
         
-        # Načtení a úprava konfigurace uživatele
         user_config, full_config = get_user_config(chat_id)
-        user_config[symbol] = {'name': name, 'threshold': threshold, 'asset_type': asset_type}
+        user_config[symbol] = {'name': name, 'threshold': threshold, 'asset_type': asset_type, 'currency': currency}
         save_user_config(chat_id, user_config, full_config)
         
         # Inicializace stavu
@@ -819,14 +977,17 @@ async def list_cryptos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 Nemáte nastavené žádné kryptoměny.")
         return
     
-    msg = "📋 <b>Vaše kryptoměny:</b>\n\n"
+    msg = "📋 <b>Sledované assety:</b>\n\n"
     for symbol, conf in user_config.items():
         last_price = user_state.get(symbol, {}).get('last_notification_price', 0)
-        # Pokud last_price neexistuje, je to chyba nebo první běh, zobrazíme 0 nebo ?
-        price_display = f"${last_price:,.2f}" if last_price else "?"
+        curr_sym = CURRENCY_SYMBOLS.get(conf.get('currency', 'USD'), '$')
+        price_display = f"{curr_sym}{last_price:,.2f}" if last_price else "?"
         threshold = conf.get('threshold', 0.05) * 100
-        msg += f"• <b>{symbol}</b> (Limit: {threshold}%)\n"
-        msg += f"  Naposledy: {price_display}\n\n"
+        asset_emoji = "🪙" if conf.get('asset_type') == 'crypto' else "📈"
+        name = conf.get('name', symbol)
+        display_name = f"{name}" if name != symbol else symbol
+        msg += f"{asset_emoji} <b>{symbol}</b> — {display_name}\n"
+        msg += f"  Limit: {threshold}% | Cena: {price_display}\n\n"
     
     await update.message.reply_text(msg, parse_mode='HTML')
 
@@ -868,18 +1029,16 @@ async def update_threshold_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not user_config:
         await update.message.reply_text("Nemáte co upravovat.")
-    return ConversationHandler.END
+        return ConversationHandler.END
 
-    # Pokud uživatel zadal /update BTC
     if context.args:
         symbol = context.args[0].upper()
         if symbol in user_config:
             context.user_data['pending_symbol'] = symbol
             context.user_data['pending_name'] = symbol
             await update.message.reply_text(f"Zadejte nové % pro {symbol}:")
-    return WAITING_UPDATE_THRESHOLD
+            return WAITING_UPDATE_THRESHOLD
 
-    # Jinak tlačítka
     keyboard = [[InlineKeyboardButton(f"{s} ({c['threshold']*100}%)", callback_data=f"upd_{s}")] for s, c in user_config.items()]
     await update.message.reply_text("Vyberte:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
@@ -1040,13 +1199,13 @@ async def price_check_loop(app, stop_event):
                     print(f"📊 [{chat_id_str}] {symbol}: ${curr_price:,.2f} | Změna: {change_pct*100:.2f}% (limit: {threshold*100}%)")
                     
                     if change_pct >= threshold:
-                        # Alert
                         direction = "📈 VZESTUP" if curr_price > last_price else "📉 POKLES"
                         emoji = "🟢" if curr_price > last_price else "🔴"
+                        curr_sym = CURRENCY_SYMBOLS.get(settings.get('currency', 'USD'), '$')
                         
                         msg = f"""
 {emoji} <b>{settings.get('name', symbol)} ({symbol})</b> {direction} <b>{change_pct*100:.1f}%</b>
-💰 <b>${curr_price:,.2f}</b> (předtím: ${last_price:,.2f})
+💰 <b>{curr_sym}{curr_price:,.2f}</b> (předtím: {curr_sym}{last_price:,.2f})
 """
                         try:
                             await app.bot.send_message(chat_id=int(chat_id_str), text=msg, parse_mode='HTML')
@@ -1097,7 +1256,7 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('add', add_crypto)],
         states={
-            WAITING_ASSET_TYPE: [CallbackQueryHandler(handle_asset_type_selection, pattern='^asset_(crypto|stock)_')],
+            WAITING_AI_CONFIRM: [CallbackQueryHandler(handle_ai_selection, pattern='^aim_')],
             WAITING_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_threshold)]
         },
         fallbacks=[CommandHandler('cancel', cancel)]
