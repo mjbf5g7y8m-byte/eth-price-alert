@@ -46,6 +46,46 @@ SPECIFIC_COIN_IDS = {
     'RAIL': 'railgun',  # Railgun (https://www.coingecko.com/en/coins/railgun)
 }
 
+COINGECKO_PRICE_CACHE = {}
+COINGECKO_CACHE_TIME = 0
+
+def prefetch_coingecko_prices():
+    """Stáhne ceny pro všechny SPECIFIC_COIN_IDS tokeny v jednom API volání."""
+    global COINGECKO_PRICE_CACHE, COINGECKO_CACHE_TIME
+    
+    if not SPECIFIC_COIN_IDS:
+        return
+    
+    coin_ids = ','.join(SPECIFIC_COIN_IDS.values())
+    try:
+        url = f'https://api.coingecko.com/api/v3/simple/price?ids={coin_ids}&vs_currencies=usd'
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            for symbol, coin_id in SPECIFIC_COIN_IDS.items():
+                if coin_id in data and 'usd' in data[coin_id]:
+                    price = data[coin_id]['usd']
+                    if price is not None:
+                        COINGECKO_PRICE_CACHE[symbol] = float(price)
+            COINGECKO_CACHE_TIME = time.time()
+            print(f"✅ CoinGecko batch: {', '.join(f'{s}=${p:,.2f}' for s, p in COINGECKO_PRICE_CACHE.items())}")
+        elif response.status_code == 429:
+            print("⚠️  CoinGecko batch rate limit, zkusím znovu za 3s...")
+            time.sleep(3)
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                for symbol, coin_id in SPECIFIC_COIN_IDS.items():
+                    if coin_id in data and 'usd' in data[coin_id]:
+                        price = data[coin_id]['usd']
+                        if price is not None:
+                            COINGECKO_PRICE_CACHE[symbol] = float(price)
+                COINGECKO_CACHE_TIME = time.time()
+                print(f"✅ CoinGecko batch (retry): {', '.join(f'{s}=${p:,.2f}' for s, p in COINGECKO_PRICE_CACHE.items())}")
+    except Exception as e:
+        print(f"⚠️  CoinGecko batch error: {e}")
+
 # Blacklist známých akcií - tyto tickery NIKDY nebudou považovány za kryptoměny, i když jsou na CoinGecko
 STOCK_BLACKLIST = {
     'AAPL', 'TSLA', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'NVDA', 'NFLX', 'DIS',
@@ -478,9 +518,12 @@ def get_crypto_price(symbol):
     """Získá aktuální cenu kryptoměny z náhodně vybraného API s retry mechanikou."""
     symbol_upper = symbol.upper()
     
-    # Pro tokeny s SPECIFIC_COIN_IDS (RAIL, COW, SAFE...) zkusíme CoinGecko PRVNÍ,
-    # protože ostatní API je často nemají
+    # Pro tokeny s SPECIFIC_COIN_IDS (RAIL, COW, SAFE...) použijeme batch cache
     if symbol_upper in SPECIFIC_COIN_IDS:
+        if symbol_upper in COINGECKO_PRICE_CACHE and (time.time() - COINGECKO_CACHE_TIME) < 120:
+            price = COINGECKO_PRICE_CACHE[symbol_upper]
+            print(f"✅ [{symbol}] Cena z CoinGecko cache: ${price:,.2f}")
+            return price
         price, api_name = get_price_from_coingecko(symbol)
         if price is not None:
             print(f"✅ [{symbol}] Cena získána z {api_name}: ${price:,.2f}")
@@ -1161,6 +1204,8 @@ async def price_check_loop(app, stop_event):
                 continue
             
             print(f"📊 Kontroluji {len(symbol_types)} symbolů (kryptoměny + akcie) pro {len(full_config)} uživatelů")
+            
+            prefetch_coingecko_prices()
             
             current_prices = {}
             for sym, asset_type in symbol_types.items():
